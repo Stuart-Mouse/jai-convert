@@ -244,6 +244,8 @@ any_to_any :: (_dst: Any, _src: Any) -> bool {
             // TODO: make this more powerful by allowing recasting of pointers to common type.
             // e.g.: dst is *Type_Info and src is *Type_Info_Struct, should be allowed
             
+            
+            
             if src.type == dst.type {
                 dst.value_pointer.(**void).* = src.value_pointer.(**void).*;
             }
@@ -867,7 +869,7 @@ is_narrowing_int :: (dst_ti: *Type_Info_Integer, src_ti: *Type_Info_Integer) -> 
     return false;
 }
 
-// returns false if cast result would be out-of-range for destination type, and clamping is not enabled
+// returns false if cast result would be out-of-range for destination type and clamping is not enabled
 int_to_int :: (dst: Any, src: Any, should_clamp := false) -> bool {
     assert(src.type.type == .INTEGER);
     assert(dst.type.type == .INTEGER);
@@ -885,224 +887,6 @@ int_to_int :: (dst: Any, src: Any, should_clamp := false) -> bool {
     u64_value, is_negative := int_to_abs_and_sign(src);
     return range_check_and_store(dst, u64_value, is_negative, should_clamp);
 }
-
-float_to_int :: (dst: Any, src: Any) {
-    assert(src.type.type == .FLOAT);
-    assert(dst.type.type == .INTEGER);
-    
-    s64_value: s64;
-    if src.type.runtime_size == {
-        case 4; s64_value = src.value_pointer.(*float32).*.(s64);
-        case 8; s64_value = src.value_pointer.(*float64).*.(s64);
-    }
-    if dst.type.(*Type_Info_Integer).signed {
-        if dst.type.runtime_size == {
-          case 1; dst.value_pointer.(*s8 ).* = s64_value.(s8 );
-          case 2; dst.value_pointer.(*s16).* = s64_value.(s16);
-          case 4; dst.value_pointer.(*s32).* = s64_value.(s32);
-          case 8; dst.value_pointer.(*s64).* = s64_value.(s64);
-        }
-    } else {
-        if dst.type.runtime_size == {
-          case 1; dst.value_pointer.(*u8 ).* = s64_value.(u8 );
-          case 2; dst.value_pointer.(*u16).* = s64_value.(u16);
-          case 4; dst.value_pointer.(*u32).* = s64_value.(u32);
-          case 8; dst.value_pointer.(*u64).* = s64_value.(u64);
-        }
-    }
-}
-
-enum_as_int :: inline (src: Any) -> Any {
-    assert(src.type.type == .ENUM);
-    return Any.{ src.type.(*Type_Info_Enum).internal_type, src.value_pointer };
-}
-
-// for convenience
-int_to_enum   :: inline (dst: Any, src: Any) { int\ _to_int   ( enum_as_int(dst), src              ); }
-enum_to_int   :: inline (dst: Any, src: Any) { int\ _to_int   ( dst,              enum_as_int(src) ); }
-enum_to_enum  :: inline (dst: Any, src: Any) { int\ _to_int   ( enum_as_int(dst), enum_as_int(src) ); }
-float_to_enum :: inline (dst: Any, src: Any) { float_to_int   ( enum_as_int(dst), src              ); }
-enum_to_float :: inline (dst: Any, src: Any) { int\ _to_float ( dst,              enum_as_int(src) ); }
-
-
-
-is_narrowing_float :: inline (dst_ti: *Type_Info_Float, src_ti: *Type_Info_Float) -> bool {
-    return src_ti.runtime_size > dst_ti.runtime_size;
-} 
-
-float_to_float :: (dst: Any, src: Any) {
-    assert(src.type.type == .FLOAT);
-    assert(dst.type.type == .FLOAT);
-    
-    // nested switch here because there's only four cases; no point using an intermediate value
-    if src.type.runtime_size == {
-      case 4;
-        if dst.type.runtime_size == {
-          case 4; dst.value_pointer.(*float32).* = src.value_pointer.(*float32).*;
-          case 8; dst.value_pointer.(*float64).* = src.value_pointer.(*float32).*.(float64);
-        }
-      case 8;
-        if dst.type.runtime_size == {
-          case 4; dst.value_pointer.(*float32).* = src.value_pointer.(*float64).*.(float32);
-          case 8; dst.value_pointer.(*float64).* = src.value_pointer.(*float64).*;
-        }
-    }
-}
-
-int_to_float :: (dst: Any, src: Any) {
-    assert(src.type.type == .INTEGER);
-    assert(dst.type.type == .FLOAT);
-    
-    // TODO: provide some kind of range checking...
-    
-    f64_value: float64;
-    if src.type.runtime_size == {
-        case 1; f64_value = src.value_pointer.(*s8 ).*.(float64);
-        case 2; f64_value = src.value_pointer.(*s16).*.(float64);
-        case 4; f64_value = src.value_pointer.(*s32).*.(float64);
-        case 8; f64_value = src.value_pointer.(*s64).*.(float64);
-    }
-    
-    if dst.type.runtime_size == {
-        case 4; dst.value_pointer.(*float32).* = f64_value.(float32);
-        case 8; dst.value_pointer.(*float64).* = f64_value.(float64);
-    }
-}
-
-// ========== Resolving Unions ==========
-
-/*
-    For use in cases where a union's type is determined by some tag in the parent struct.
-    
-    Some_Struct :: struct {
-        union_type: enum  { ... };
-        some_union: union { ... };
-    }
-    
-    TODO: write a proc to generate the lookup Resolve_Union_By_Tag_Data for Tagged_Union
-    
-    I should document this because I forgot it and then had to figure out why I did it this way again...
-    So the reason there's a union_ti passed in here is because we can't actually match on src type, since it may be some dynamically loaded type info
-    So we want to match the dst union type to what is in the user data and then just verify that the src type is also a union
-    In cases where we know we can use src type, we will just have to pass it as union_ti as well
-*/
-resolve_union_by_external_tag : Resolve_Union_Proc : (union_ti: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
-    user_data := data.(*Resolve_Union_By_Tag_Data);
-    
-    if union_ti != user_data.union_type  return null;
-    if src.parent.value_pointer == null  return null;
-    if data                     == null  return null;
-    
-    src_ti := src.data.type.(*Type_Info_Struct);
-    assert(src_ti.type == .STRUCT);
-    assert(src_ti.textual_flags & .UNION == .UNION);
-    
-    dst_tag_any := Small_Any.{ user_data.tag_type };
-    
-    src_tag_field := get_field(xx src.parent.type, user_data.tag_member_name);
-    src_tag_any   := get_member_any(src.parent.value_pointer, src_tag_field);
-    if !any_to_any(dst_tag_any, src_tag_any)  return null;
-    
-    src_member_name: string;
-    for user_data.lookup {
-        if it.tag_value == dst_tag_s64.value_number {
-            src_member_name = it.member_name;
-            break;
-        }
-    }
-    if !src_member_name  return null;
-    
-    for *src_member: src_ti.members {
-        if src_member.flags & .CONSTANT  continue;
-        if src_member.name == src_member_name {
-            return src_member;
-        }
-    }
-    
-    return null;
-}
-
-/*
-    For when all union members share some common base type, and that base type contains the type tag for the union.
-    
-    Entity_Type :: enum { .KNIGHT; .GOBLIN; ... };
-    Entity_Base :: struct {
-        entity_type:    Entity_Type;
-        health:         int;
-        ...
-    }
-    Knight :: struct { 
-        using #as base: Entity_Base;
-        ...
-    }
-    Goblin :: struct { 
-        using #as base: Goblin;
-        ...
-    }
-    Entity_Union :: union {
-        using #as base: Entity_Base;
-        knight:         Knight;
-        goblin:         Goblin;
-        ...
-    }
-    
-    resolve_entity_union_data := Resolve_Union_By_Tag_Data.{ "type", type_info(Entity_Union), type_info(Entity_Type), .[
-        .{ #run Number_Union.from(Entity_Type.KNIGHT),  "knight" },
-        .{ #run Number_Union.from(Entity_Type.GOBLIN),  "goblin" },
-    ]};
-    array_add(*context.conversion_settings.get_union_type_procs, .{ resolve_union_by_tag, resolve_entity_union_data });
-    
-    
-    The need to use a #run on Number_Union.from() is less than ideal, but I have more confidence after switching 
-        to using the Number_Union that the code is correct and won't fail for enums with smaller backing integer sizes.
-    And the rest of this is also not really ideal anyhow, so I'm not gonna worry about making it 2% nicer 
-        until I figure out a way to make the 98% of union remapping less clunky and horrible.
-*/
-resolve_union_by_internal_tag : Resolve_Union_Proc : (union_ti: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
-    user_data := data.(*Resolve_Union_By_Tag_Data);
-    
-    if union_ti != user_data.union_type  return null;
-    if data == null  return null;
-    
-    src_ti := src.data.type.(*Type_Info_Struct);
-    assert(src_ti.type == .STRUCT);
-    assert(src_ti.textual_flags & .UNION == .UNION);
-    
-    dst_tag_any := Small_Any.{ user_data.tag_type };
-    
-    src_tag_field := get_field(xx src.data.type, user_data.tag_member_name);
-    src_tag_any   := get_member_any(src.data.value_pointer, src_tag_field);
-    if !any_to_any(dst_tag_any, src_tag_any)  return null;
-    
-    src_member_name: string;
-    for user_data.lookup {
-        if it.tag_value == dst_tag_any.value_number {
-            src_member_name = it.member_name;
-            break;
-        }
-    }
-    if !src_member_name  return null;
-    
-    for *src_member: src_ti.members {
-        if src_member.flags & .CONSTANT  continue;
-        if src_member.name == src_member_name {
-            return src_member;
-        }
-    }
-    
-    return null;
-}
-
-Resolve_Union_By_Tag_Data :: struct {
-    tag_member_name:    string;
-    tag_type:           *Type_Info_Enum;
-    union_type:         *Type_Info;
-    lookup:             [] struct { tag_value: Number_Union; member_name: string; };
-}
-
-
-
-#scope_module
 
 // get absolute value of any int type, and a boolean representing whether the value was negative
 int_to_abs_and_sign :: (src: Any) -> (abs: u64, sign: bool) {
@@ -1200,6 +984,8 @@ range_check_and_store :: (dst: Any, abs_value_u64: u64, is_negative: bool, shoul
     return true;
 }
 
+#scope_file // where weird helper procs belong
+
 // Any is used for int values in below procs since types may vary and there's no reason to make this polymorphic.
 log_clamped_value_warning :: (value: Any, type: *Type_Info, min: s64, max: u64, clamped: Any) {
     log("Warning: value of % cannot be assigned to type %. (Valid range is [% - %]) Clamping to % as a fallback.", value, as_type(type), min, max, clamped);
@@ -1208,11 +994,360 @@ log_range_error :: (value: Any, type: *Type_Info, min: s64, max: u64, clamped: A
     log("Error: value of % cannot be assigned to type %. (Valid range is [% - %].)", value, as_type(type), min, max);
 }
 
+#scope_export
 
+
+
+enum_as_int :: inline (src: Any) -> Any {
+    assert(src.type.type == .ENUM);
+    return Any.{ src.type.(*Type_Info_Enum).internal_type, src.value_pointer };
+}
+
+// for convenience
+int_to_enum   :: inline (dst: Any, src: Any) { int\ _to_int   ( enum_as_int(dst), src              ); }
+enum_to_int   :: inline (dst: Any, src: Any) { int\ _to_int   ( dst,              enum_as_int(src) ); }
+enum_to_enum  :: inline (dst: Any, src: Any) { int\ _to_int   ( enum_as_int(dst), enum_as_int(src) ); }
+float_to_enum :: inline (dst: Any, src: Any) { float_to_int   ( enum_as_int(dst), src              ); }
+enum_to_float :: inline (dst: Any, src: Any) { int\ _to_float ( dst,              enum_as_int(src) ); }
+
+
+is_narrowing_float :: inline (dst_ti: *Type_Info_Float, src_ti: *Type_Info_Float) -> bool {
+    return src_ti.runtime_size > dst_ti.runtime_size;
+} 
+
+float_to_float :: (dst: Any, src: Any) {
+    assert(src.type.type == .FLOAT);
+    assert(dst.type.type == .FLOAT);
+    
+    // nested switch here because there's only four cases; no point using an intermediate value
+    if src.type.runtime_size == {
+      case 4;
+        if dst.type.runtime_size == {
+          case 4; dst.value_pointer.(*float32).* = src.value_pointer.(*float32).*;
+          case 8; dst.value_pointer.(*float64).* = src.value_pointer.(*float32).*.(float64);
+        }
+      case 8;
+        if dst.type.runtime_size == {
+          case 4; dst.value_pointer.(*float32).* = src.value_pointer.(*float64).*.(float32);
+          case 8; dst.value_pointer.(*float64).* = src.value_pointer.(*float64).*;
+        }
+    }
+}
+
+
+float_to_int :: (dst: Any, src: Any) {
+    assert(src.type.type == .FLOAT);
+    assert(dst.type.type == .INTEGER);
+    
+    s64_value: s64;
+    if src.type.runtime_size == {
+        case 4; s64_value = src.value_pointer.(*float32).*.(s64);
+        case 8; s64_value = src.value_pointer.(*float64).*.(s64);
+    }
+    if dst.type.(*Type_Info_Integer).signed {
+        if dst.type.runtime_size == {
+          case 1; dst.value_pointer.(*s8 ).* = s64_value.(s8 );
+          case 2; dst.value_pointer.(*s16).* = s64_value.(s16);
+          case 4; dst.value_pointer.(*s32).* = s64_value.(s32);
+          case 8; dst.value_pointer.(*s64).* = s64_value.(s64);
+        }
+    } else {
+        if dst.type.runtime_size == {
+          case 1; dst.value_pointer.(*u8 ).* = s64_value.(u8 );
+          case 2; dst.value_pointer.(*u16).* = s64_value.(u16);
+          case 4; dst.value_pointer.(*u32).* = s64_value.(u32);
+          case 8; dst.value_pointer.(*u64).* = s64_value.(u64);
+        }
+    }
+}
+
+int_to_float :: (dst: Any, src: Any) {
+    assert(src.type.type == .INTEGER);
+    assert(dst.type.type == .FLOAT);
+    
+    // TODO: provide some kind of range checking...
+    
+    f64_value: float64;
+    if src.type.runtime_size == {
+        case 1; f64_value = src.value_pointer.(*s8 ).*.(float64);
+        case 2; f64_value = src.value_pointer.(*s16).*.(float64);
+        case 4; f64_value = src.value_pointer.(*s32).*.(float64);
+        case 8; f64_value = src.value_pointer.(*s64).*.(float64);
+    }
+    
+    if dst.type.runtime_size == {
+        case 4; dst.value_pointer.(*float32).* = f64_value.(float32);
+        case 8; dst.value_pointer.(*float64).* = f64_value.(float64);
+    }
+}
+
+// ========== String Stuff ==========
+
+/*
+    While I don't want to put too much parsing stuff in this module, I think it makes sense to have at least a few basics.
+    To that end, a dynamic string_to_int and an improved version of Reflection.jai's set_value_from_string are provided.
+*/
+
+string_to_int :: (dst: Any, src: string, should_clamp := false) -> success: bool, remainder: string {
+    str := src;
+    
+    negate := false;
+    if str && str[0] == #char "-" {
+        negate = true;
+        advance(*str, 1);
+    }
+    
+    base: u64 = 10;
+    if str[0] == #char "0" && str.count >= 2 {
+        if str[1] == {
+          case #char "b"; 
+            advance(*str, 2);
+            base = 2;
+            
+          case #char "x"; 
+            advance(*str, 2);
+            base = 16;
+            
+          // case #char "h";
+          //   advance(*str, 2);
+          //   base = 16;
+          //   is_hex_float = true;
+          //   // verify that input string is exactly 4, 8, or 16 characters
+        }
+    }
+    
+    u64_value, ok, remainder := string_to_u64(str, base);
+    if !ok {
+        log("Error: failed to parse integer from '%'.", s);
+        return false, remainder;
+    }
+    
+    return range_check_and_store(dst, u64_value, negate, should_clamp), remainder;
+}
+#scope_export
+
+set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -> bool {
+    if text.count <= 0  return true; // empty string -> return true
+    
+    if dst.type.type == {
+      case .INTEGER;
+        // TODO: do we care that value may still get set in the error case if there is some remainder? Probably not...
+        ok, remainder := string_to_int(dst, text);
+        return ok && !remainder;
+        
+        
+      case .FLOAT;
+        value, ok, remainder := string_to_float64(text);
+        if !ok || remainder  {
+            return false;
+        }
+        if dst.type.runtime_size == {
+          case 4; dst.value_pointer.(*float32).* = value.(float32);
+          case 8; dst.value_pointer.(*float64).* = value;
+        }
+        return true;
+        
+        
+      case .BOOL;
+        if text == {
+          case "true";   dst.value_pointer.(*bool).* = true;
+          case "false";  dst.value_pointer.(*bool).* = false;
+          case;
+            log("Error: unable to parse bool value from string: '%'", text);
+            return false;
+        }
+        return true;
+        
+        
+      case .STRING;
+        if should_copy_strings
+            then dst.value_pointer.(*string).* = copy_string(text);
+            else dst.value_pointer.(*string).* = text;
+        return true;
+        
+        
+      case .ENUM;
+        // NOTE: The logic here is a bit weird since, whether we get the value by name or as an int,
+        //       we want to OR in the parsed value for enum_flags instead of overwriting the existing value.
+        
+        enum_type := dst.type.(*Type_Info_Enum);  
+        value := Any_Number.{ dst.type };
+        success := false;
+        
+        for enum_type.names {
+            if it == text {
+                if enum_type.runtime_size == {
+                    case 1; value.value_number.as_s\8 = enum_type.values[it_index].(s\8); 
+                    case 2; value.value_number.as_s16 = enum_type.values[it_index].(s16); 
+                    case 4; value.value_number.as_s32 = enum_type.values[it_index].(s32); 
+                    case 8; value.value_number.as_s64 = enum_type.values[it_index].(s64); 
+                }
+                success = true;
+                break;
+            }
+        }
+        if !success {
+            success = set_value_from_string(Any.{ enum_type.internal_type, *value.value_bytes }, text);
+        }
+        if !success {
+            log("Error: failed to parse enum value from string '%'", text);
+            return false;
+        }
+        
+        if enum_type.enum_type_flags & .FLAGS {
+            old_value := Any_Number.from(dst);
+            value.value_number.as_u64 |= old_value.value_number.as_u64;
+            memcpy_any(dst, to_any(*value));
+        } else {
+            memcpy_any(dst, to_any(*value));
+        }
+        return true;
+    }
+
+    log("Error: unsupported type in set_value_from_string()");
+    return false;
+}
+
+
+// ========== Resolving Unions ==========
+
+/*
+    For use in cases where a union's type is determined by some tag in the parent struct.
+    
+    Some_Struct :: struct {
+        union_type: enum  { ... };
+        some_union: union { ... };
+    }
+    
+    TODO: write a proc to generate the lookup Resolve_Union_By_Tag_Data for Tagged_Union
+    
+    I should document this because I forgot it and then had to figure out why I did it this way again...
+    So the reason there's a union_ti passed in here is because we can't actually match on src type, since it may be some dynamically loaded type info
+    So we want to match the dst union type to what is in the user data and then just verify that the src type is also a union
+    In cases where we know we can use src type, we will just have to pass it as union_ti as well
+*/
+resolve_union_by_external_tag : Resolve_Union_Proc : (union_ti: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
+    user_data := data.(*Resolve_Union_By_Tag_Data);
+    
+    if union_ti != user_data.union_type  return null;
+    if src.parent.value_pointer == null  return null;
+    if data                     == null  return null;
+    
+    src_ti := src.data.type.(*Type_Info_Struct);
+    assert(src_ti.type == .STRUCT);
+    assert(src_ti.textual_flags & .UNION == .UNION);
+    
+    dst_tag_any := Any_Number.{ user_data.tag_type };
+    
+    src_tag_field := get_field(xx src.parent.type, user_data.tag_member_name);
+    src_tag_any   := get_member_any(src.parent.value_pointer, src_tag_field);
+    if !any_to_any(dst_tag_any, src_tag_any)  return null;
+    
+    src_member_name: string;
+    for user_data.lookup {
+        if it.tag_value == dst_tag_s64.value_number {
+            src_member_name = it.member_name;
+            break;
+        }
+    }
+    if !src_member_name  return null;
+    
+    for *src_member: src_ti.members {
+        if src_member.flags & .CONSTANT  continue;
+        if src_member.name == src_member_name {
+            return src_member;
+        }
+    }
+    
+    return null;
+}
+
+/*
+    For when all union members share some common base type, and that base type contains the type tag for the union.
+    
+    Entity_Type :: enum { .KNIGHT; .GOBLIN; ... };
+    Entity_Base :: struct {
+        entity_type:    Entity_Type;
+        health:         int;
+        ...
+    }
+    Knight :: struct { 
+        using #as base: Entity_Base;
+        ...
+    }
+    Goblin :: struct { 
+        using #as base: Goblin;
+        ...
+    }
+    Entity_Union :: union {
+        using #as base: Entity_Base;
+        knight:         Knight;
+        goblin:         Goblin;
+        ...
+    }
+    
+    resolve_entity_union_data := Resolve_Union_By_Tag_Data.{ "type", type_info(Entity_Union), type_info(Entity_Type), .[
+        .{ #run Number_Union.from(Entity_Type.KNIGHT),  "knight" },
+        .{ #run Number_Union.from(Entity_Type.GOBLIN),  "goblin" },
+    ]};
+    array_add(*context.conversion_settings.get_union_type_procs, .{ resolve_union_by_tag, resolve_entity_union_data });
+    
+    
+    The need to use a #run on Number_Union.from() is less than ideal, but I have more confidence after switching 
+        to using the Number_Union that the code is correct and won't fail for enums with smaller backing integer sizes.
+    And the rest of this is also not really ideal anyhow, so I'm not gonna worry about making it 2% nicer 
+        until I figure out a way to make the 98% of union remapping less clunky and horrible.
+*/
+resolve_union_by_internal_tag : Resolve_Union_Proc : (union_ti: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
+    user_data := data.(*Resolve_Union_By_Tag_Data);
+    
+    if union_ti != user_data.union_type  return null;
+    if data == null  return null;
+    
+    src_ti := src.data.type.(*Type_Info_Struct);
+    assert(src_ti.type == .STRUCT);
+    assert(src_ti.textual_flags & .UNION == .UNION);
+    
+    dst_tag_any := Any_Number.{ type = user_data.tag_type };
+    
+    src_tag_field := get_field(xx src.data.type, user_data.tag_member_name);
+    src_tag_any   := get_member_any(src.data.value_pointer, src_tag_field);
+    if !any_to_any(dst_tag_any, src_tag_any)  return null;
+    
+    src_member_name: string;
+    for user_data.lookup {
+        if it.tag_value == dst_tag_any.value {
+            src_member_name = it.member_name;
+            break;
+        }
+    }
+    if !src_member_name  return null;
+    
+    for *src_member: src_ti.members {
+        if src_member.flags & .CONSTANT  continue;
+        if src_member.name == src_member_name {
+            return src_member;
+        }
+    }
+    
+    return null;
+}
+
+Resolve_Union_By_Tag_Data :: struct {
+    tag_member_name:    string;
+    tag_type:           *Type_Info_Enum;
+    union_type:         *Type_Info;
+    lookup:             [] struct { tag_value: Number_Union; member_name: string; };
+}
+
+
+
+#scope_module
 
 #import "Basic";
 #import "Reflection";
 #import "Math";
 
+// As usual, I dislike that I have a dependency on my utils module here, but for now IIWII.
 #import "Utils";
 
