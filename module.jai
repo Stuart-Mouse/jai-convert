@@ -609,7 +609,7 @@ remap_array :: (dst: Any, src: Any) -> bool {
         raw_array := dst_value_pointer.(*Resizable_Array);
         
         // TODO: should we only reserve space when resizable array is empty, like in .VIEW case above?
-        array_reserve_nonpoly(xx raw_array, src_count, dst_element_type.runtime_size);
+        array_reserve(raw_array, src_count, dst_element_type.runtime_size);
         assert(raw_array.allocated == src_count);
         raw_array.count = src_count;
         
@@ -949,10 +949,10 @@ range_check_and_store :: (dst: Any, abs_value_u64: u64, is_negative: bool, shoul
     if is_negative {
         if abs_value_u64 > abs_vmin {
             if should_clamp {
-                log_clamped_value_warning(-(abs_value_u64-1).(s64) - 1, info, vmin, vmax, vmin);
+                log_clamped_value_warning(abs_value_u64, true, info, vmin, vmax, abs_vmin, abs_vmin != 0);
                 abs_value_u64 = abs_vmin;
             } else {
-                log_range_error(-(abs_value_u64-1).(s64) - 1, info, vmin, vmax, vmin);
+                log_range_error(abs_value_u64, true, info, vmin, vmax);
                 return false;
             }
         }
@@ -971,10 +971,10 @@ range_check_and_store :: (dst: Any, abs_value_u64: u64, is_negative: bool, shoul
     } else {
         if abs_value_u64 > vmax.(u64) {
             if should_clamp {
-                log_clamped_value_warning(abs_value_u64, info, vmin, vmax, vmax);
+                log_clamped_value_warning(abs_value_u64, false, info, vmin, vmax, vmax, false);
                 abs_value_u64 = vmax.(u64);
             } else {
-                log_range_error(abs_value_u64, info, vmin, vmax, vmax);
+                log_range_error(abs_value_u64, false, info, vmin, vmax);
                 return false;
             }
         }
@@ -987,11 +987,11 @@ range_check_and_store :: (dst: Any, abs_value_u64: u64, is_negative: bool, shoul
 #scope_file // where weird helper procs belong
 
 // Any is used for int values in below procs since types may vary and there's no reason to make this polymorphic.
-log_clamped_value_warning :: (value: Any, type: *Type_Info, min: s64, max: u64, clamped: Any) {
-    log("Warning: value of % cannot be assigned to type %. (Valid range is [% - %]) Clamping to % as a fallback.", value, as_type(type), min, max, clamped);
+log_clamped_value_warning :: (abs_value: u64, negative: bool, type: *Type_Info, min: s64, max: u64, abs_clamped: u64, clamped_negative: bool) {
+    log("Warning: value of %0% cannot be assigned to type %. (Valid range is [% - %]) Clamping to %0% as a fallback.", ifx negative then "-", abs_value, as_type(type), min, max, ifx clamped_negative then "-", abs_clamped);
 }
-log_range_error :: (value: Any, type: *Type_Info, min: s64, max: u64, clamped: Any) {
-    log("Error: value of % cannot be assigned to type %. (Valid range is [% - %].)", value, as_type(type), min, max);
+log_range_error :: (abs_value: u64, negative: bool, type: *Type_Info, min: s64, max: u64) {
+    log("Error: value of %0% cannot be assigned to type %. (Valid range is [% - %].)", ifx negative then "-", abs_value, as_type(type), min, max);
 }
 
 #scope_export
@@ -1118,7 +1118,7 @@ string_to_int :: (dst: Any, src: string, should_clamp := false) -> success: bool
     
     u64_value, ok, remainder := string_to_u64(str, base);
     if !ok {
-        log("Error: failed to parse integer from '%'.", s);
+        log("Error: failed to parse integer from '%'.", str);
         return false, remainder;
     }
     
@@ -1171,23 +1171,23 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
         //       we want to OR in the parsed value for enum_flags instead of overwriting the existing value.
         
         enum_type := dst.type.(*Type_Info_Enum);  
-        value := Any_Number.{ dst.type };
+        new_value := Any_Number.{ type = enum_type };
         success := false;
         
         for enum_type.names {
             if it == text {
                 if enum_type.runtime_size == {
-                    case 1; value.value_number.as_s\8 = enum_type.values[it_index].(s\8); 
-                    case 2; value.value_number.as_s16 = enum_type.values[it_index].(s16); 
-                    case 4; value.value_number.as_s32 = enum_type.values[it_index].(s32); 
-                    case 8; value.value_number.as_s64 = enum_type.values[it_index].(s64); 
+                    case 1; new_value.as_s\8 = enum_type.values[it_index].(s\8); 
+                    case 2; new_value.as_s16 = enum_type.values[it_index].(s16); 
+                    case 4; new_value.as_s32 = enum_type.values[it_index].(s32); 
+                    case 8; new_value.as_s64 = enum_type.values[it_index].(s64); 
                 }
                 success = true;
                 break;
             }
         }
         if !success {
-            success = set_value_from_string(Any.{ enum_type.internal_type, *value.value_bytes }, text);
+            success = set_value_from_string(Any.{ enum_type.internal_type, *new_value.value }, text);
         }
         if !success {
             log("Error: failed to parse enum value from string '%'", text);
@@ -1196,10 +1196,10 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
         
         if enum_type.enum_type_flags & .FLAGS {
             old_value := Any_Number.from(dst);
-            value.value_number.as_u64 |= old_value.value_number.as_u64;
-            memcpy_any(dst, to_any(*value));
+            new_value.as_u64 |= old_value.as_u64;
+            memcpy_any(dst, to_any(*new_value));
         } else {
-            memcpy_any(dst, to_any(*value));
+            memcpy_any(dst, to_any(*new_value));
         }
         return true;
     }
