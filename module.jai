@@ -77,17 +77,22 @@ Conversion_Types :: enum_flags u64 {
 
 default_conversion_settings := DEFAULT_CONVERSION_SETTINGS;
 DEFAULT_CONVERSION_SETTINGS :: Conversion_Settings.{
-    allowed_conversions   = .ALL,
-    float_to_int_rounding = .TRUNCATE,
+    allowed_conversions = .ALL,
+    float_rounding_mode = .TRUNCATE,
 };
 
 #add_context conversion_settings: *Conversion_Settings = *default_conversion_settings; // by pointer so that user can switch out conversion settings trivially
 
+Float_Rounding_Mode :: enum { TRUNCATE; FLOOR; CEILING; /*NEAREST;*/ };
+
 Conversion_Settings :: struct {
     allowed_conversions:    Conversion_Types;
-    float_to_int_rounding:  enum { TRUNCATE; FLOOR; CEILING; NEAREST; };
+    float_rounding_mode:    Float_Rounding_Mode;
     pointer_recast_procs:   [..] struct { proc: Pointer_Recast_Proc; data: *void; };
     get_union_type_procs:   [..] struct { proc: Resolve_Union_Proc;  data: *void; };
+    
+    // TODO: add callback data pointer
+    any_to_any_callback:    #type (dst: Any, src: Any) -> handled: bool, ok: bool; // if handled is false, ok is ignored.
     
     // TODO: probably add some more in-depth rules for struct remapping.
     //       and probably allow overloading these on a per-struct basis
@@ -159,6 +164,12 @@ any_to_new :: inline (T: *Type_Info, src: Any) -> Any, bool {
 any_to_any :: (_dst: Any, _src: Any) -> bool {
     dst := _dst;
     src := _src;
+    
+    callback := context.conversion_settings.any_to_any_callback;
+    if callback {
+        handled, ok := callback(dst, src);
+        if handled  return ok;
+    }
     
     // TODO: allow user to callback on dst and src types before unwrapping variants.
     //       maybe even check for special handling each time we unwrap nested variants?
@@ -244,8 +255,6 @@ any_to_any :: (_dst: Any, _src: Any) -> bool {
             // TODO: make this more powerful by allowing recasting of pointers to common type.
             // e.g.: dst is *Type_Info and src is *Type_Info_Struct, should be allowed
             
-            
-            
             if src.type == dst.type {
                 dst.value_pointer.(**void).* = src.value_pointer.(**void).*;
             }
@@ -326,7 +335,7 @@ remap_struct :: (dst: Any, src: Any) -> bool {
         dst_member_any := Any.{ dst_member.type, dst.value_pointer + dst_member.offset_in_bytes };
         src_member_any := Any.{ src_member.type, src.value_pointer + src_member.offset_in_bytes };
         
-        if type_is_union(dst_member.type) {
+        if is_union_type(dst_member.type) {
             if !remap_union(dst_member_any, src_member_any, src, src_member)  {
                 log("Error: failed while remapping struct member (union) %!", dst_member.name);
                 return false;
@@ -376,7 +385,7 @@ remap_union :: (dst: Any, src: Any, src_parent: Any, src_member_info: *Type_Info
     }
     
     // TODO: probably should support this, shouldn't be too hard
-    if !type_is_union(src.type) {
+    if !is_union_type(src.type) {
         log("Error: Conversion from non-union type to union is not supported.");
         return false;
     }
@@ -409,61 +418,6 @@ remap_union :: (dst: Any, src: Any, src_parent: Any, src_member_info: *Type_Info
     return true; // TODO?
 }
 
-
-
-type_is_union :: (ti: *Type_Info) -> bool {
-    return ti.type == .STRUCT && (ti.(*Type_Info_Struct).textual_flags & .UNION);
-}
-
-
-/*
-    remap_array implementation notes
-
-
-    What happens if we have some kind of change in type like
-        [N] T to [M][N] T
-    
-    We would probably want the [N]u8 to map to the first row (M = 0) of the [M][N]u8
-    But what we would actually get would be that the [N]u8's elements get spread across the M columns.
-    So in order ot resolve this we would actually need to first calculate how much indirection there is in each case
-        and then map the types so that the base type is what matches up.
-    
-    This is starting to get a bit complicated, and we also still can't really check ahead of time if the base types even *actually* match up or not
-    All we have to go off of here is the number of levels of indirection, and the array types/counts
-    We could implement some basic heuristics, but if we then want it to be configurable, it could be a bit much.
-    
-    But, we also don't want to just give up on arrays altogether...
-    and going from a single value to an array of values is still very useful.
-    
-    current logic for single to array will actually probably work just fine
-    but when it comes to nest arrays, things get tricky.
-    pre-cheking level of indireciton is probably not a bad idea
-    
-    but then we have to think about array types as well, and that could get messy
-    like for example
-        [M][N] T -> [][N] T
-        or 
-        [M][N] T -> [M][..] T
-        
-    
-    
-    
-    All array conversions are essentailly just view -> view, but each dst type has some distinct concerns
-    
-    if dst is 
-        fixed
-            we may be forced to lengthen or truncate src array
-            and we don't currently have a means to store the actual length that was filled in here
-        view
-            need to consider whether we want a clone of the src, or just duplicate the view onto src's underlying data
-            for now, we only do the copy, since this was created first to use with the data packer
-        resizable
-            need to consider setting the array's allocator
-                we can't assume the allocator is already set, because the resizable array itself may have been dynamically created by the remapper
-                should we do some lookup on array type that user specifies?
-                should it be handled in a callback?
-                we can't copy the allocator from src, because that's a pointer which will not be valid if src was from a file
-*/
 
 // TODO: consider how allocators / allocations should work and what settings to implement
 // Shallow copy vs deep copy options?
@@ -751,7 +705,7 @@ any_to_int :: (dst: Any, src: Any) -> bool {
             log_disallowed_conversion(conversion, "any_to_int");
             return false;
         }
-        float_to_int(dst, src);
+        float_to_int(dst, src, settings.float_rounding_mode);
         return true;
         
       case .BOOL;
@@ -1004,11 +958,21 @@ enum_as_int :: inline (src: Any) -> Any {
 }
 
 // for convenience
-int_to_enum   :: inline (dst: Any, src: Any) { int\ _to_int   ( enum_as_int(dst), src              ); }
-enum_to_int   :: inline (dst: Any, src: Any) { int\ _to_int   ( dst,              enum_as_int(src) ); }
-enum_to_enum  :: inline (dst: Any, src: Any) { int\ _to_int   ( enum_as_int(dst), enum_as_int(src) ); }
-float_to_enum :: inline (dst: Any, src: Any) { float_to_int   ( enum_as_int(dst), src              ); }
-enum_to_float :: inline (dst: Any, src: Any) { int\ _to_float ( dst,              enum_as_int(src) ); }
+enum_to_enum  :: inline (dst: Any, src: Any, should_clamp := false) { 
+    int_to_int(enum_as_int(dst), enum_as_int(src), should_clamp); 
+}
+enum_to_int   :: inline (dst: Any, src: Any, should_clamp := false) { 
+    int_to_int(dst, enum_as_int(src), should_clamp); 
+}
+int_to_enum   :: inline (dst: Any, src: Any, should_clamp := false) { 
+    int_to_int(enum_as_int(dst), src, should_clamp); 
+}
+enum_to_float :: inline (dst: Any, src: Any) { 
+    int_to_float(dst, enum_as_int(src)); 
+}
+float_to_enum :: inline (dst: Any, src: Any, rounding_mode := Float_Rounding_Mode.TRUNCATE) { 
+    float_to_int(enum_as_int(dst), src, rounding_mode);
+}
 
 
 is_narrowing_float :: inline (dst_ti: *Type_Info_Float, src_ti: *Type_Info_Float) -> bool {
@@ -1035,14 +999,27 @@ float_to_float :: (dst: Any, src: Any) {
 }
 
 
-float_to_int :: (dst: Any, src: Any) {
+float_to_int :: (dst: Any, src: Any, rounding_mode := Float_Rounding_Mode.TRUNCATE) {
     assert(src.type.type == .FLOAT);
     assert(dst.type.type == .INTEGER);
     
     s64_value: s64;
-    if src.type.runtime_size == {
-        case 4; s64_value = src.value_pointer.(*float32).*.(s64);
-        case 8; s64_value = src.value_pointer.(*float64).*.(s64);
+    if rounding_mode == {
+      case .TRUNCATE;
+        if src.type.runtime_size == {
+            case 4; s64_value = src.value_pointer.(*float32).*.(s64);
+            case 8; s64_value = src.value_pointer.(*float64).*.(s64);
+        }
+      case .FLOOR;
+        if src.type.runtime_size == {
+            case 4; s64_value = floor(src.value_pointer.(*float32).*).(s64);
+            case 8; s64_value = floor(src.value_pointer.(*float64).*).(s64);
+        }
+      case .CEILING;
+        if src.type.runtime_size == {
+            case 4; s64_value = ceil(src.value_pointer.(*float32).*).(s64);
+            case 8; s64_value = ceil(src.value_pointer.(*float64).*).(s64);
+        }
     }
     if dst.type.(*Type_Info_Integer).signed {
         if dst.type.runtime_size == {
@@ -1124,7 +1101,7 @@ string_to_int :: (dst: Any, src: string, should_clamp := false) -> success: bool
     
     return range_check_and_store(dst, u64_value, negate, should_clamp), remainder;
 }
-#scope_export
+
 
 set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -> bool {
     if text.count <= 0  return true; // empty string -> return true
