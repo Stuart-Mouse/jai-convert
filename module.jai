@@ -124,9 +124,14 @@ log_unsupported_conversion :: inline (conversion: Conversion_Types, proc_name: s
 
 // TODO: explain/document this structure better
 Any_With_Context :: struct {
-    data:                 Any;                        // unfortunately cannot put a 'using' on an Any...
+    any:                  Any;
     parent:               Any;                        // if data is a struct member or array element, this points to the struct or array.
     struct_member_info:   *Type_Info_Struct_Member;   // if data is a struct member, this is the info for that. may be null.
+    
+    // unfortunately cannot put a 'using' on an Any, so we use a #place and duplicate the members
+    #place any; 
+        type: *Type_Info;
+        value_pointer: *void;
 }
 
 
@@ -264,76 +269,44 @@ remap_struct :: (dst: Any, src: Any) -> bool {
         return false;
     }
     
-    dst_ti := dst.type.(*Type_Info_Struct);
-    src_ti := src.type.(*Type_Info_Struct);
-    
-    /*
-        NOTE: ignoring #place struct members
+    iterate_struct_members(dst, .SKIP_CONSTANT | .SKIP_PLACE, #code {
+        // TODO: I am probably not handling the case where a using is on a union
         
-        If we do not ignore #place members, we will end up doing a lot of duplicate work.
-        
-        I am not sure if we will ever have very nice handling for #place struct members, since they are highly problematic to remapping.
-        Generally, most #place members are used to provide an alternative way of accessing the data held in a struct, for example:
-            'xy' and 'yz' members in a Vector3
-            'floats' and 'coefs' members in a mat4
-        These are essentially 0-cost getters, or an alternative interface to the same underlying data.
-        
-        This is unlike a union, because a union is typically storing two different pieces of data in the same memory space.
-        I am sure there is probably some niche use case for #place where the members actually serve to encode unique data, but since it is uncommon, I have not really considered how to make affordances for that use case.
-    */
-    
-    // TODO: once we have union working, we can go back to using <= in the below #place checks
-    
-    // remap elements by name
-    last_dst_member_offset := -1;
-    for dst_member: dst_ti.members {
-        if dst_member.flags & .CONSTANT  continue;
-        if dst_member.offset_in_bytes < last_dst_member_offset  {
-            break; // ignoring #place members. Wish there were a better way to do this.
-        }
-        last_dst_member_offset = dst_member.offset_in_bytes;
-        
-        // TODO: I am probably not handling the case where a using is on a union, but aaaaaahhhhh 
-        
-        // use of get_field here should probably not result in any unintentional redundant copying of fields I think?
-        // but maybe if we have some memory leak show up at some point, this is a place to keep in mind...
-        src_member := get_field(src_ti, dst_member.name);
-        if src_member == null {
-            // I'm not sure if this could have unintended side-effects,
-            // but the idea here is that if we can't find a match for a member that has a using on it, 
-            // then we will fallback to trying to look for the members of the using'd member in the top level of src struct
-            // this should allow the remapper to catch cases where you factor out some member into a another struct and then 'using' that new struct in the old struct 
-            if dst_member.flags & .USING {
-                print("remapping src to using'd member % (%)\n", dst_member.name, as_type(dst_member.type));
-            
-                dst_member_any := Any.{ dst_member.type, dst.value_pointer + dst_member.offset_in_bytes };
-                if !any_to_any(dst_member_any, src)  {
-                    log("Error: failed while remapping struct member %!", dst_member.name);
+        // NOTE: get_field searches recursively through usings
+        src_member_info := get_field(xx src.type, it_info.name);
+        if src_member_info == null {
+            /*
+                I'm not sure if this could have unintended side-effects,
+                but the idea here is that if we can't find a match for a member that has a using on it, 
+                then we will fallback to trying to look for the members of the using'd member in the top level of src struct
+                this should allow the remapper to catch cases where you factor out some member into a another struct and then 'using' that new struct in the old struct 
+            */
+            if it_info.flags & .USING {
+                print("remapping src to using'd member % (%)\n", it_info.name, as_type(it_info.type));
+                if !any_to_any(it, src)  {
+                    log("Error: failed while remapping struct member %!", it_info.name);
                     return false;
                 }
             }
             continue;
         }
-        if src_member.flags & .CONSTANT  continue;
+        if src_member_info.flags & .CONSTANT  continue;
         
-        // print("remapping member % to % (%)\n", src_member.name, dst_member.name, as_type(dst_member.type));
+        src_member := get_member_any(src, src_member_info);
         
-        dst_member_any := Any.{ dst_member.type, dst.value_pointer + dst_member.offset_in_bytes };
-        src_member_any := Any.{ src_member.type, src.value_pointer + src_member.offset_in_bytes };
-        
-        if is_union_type(dst_member.type) {
-            if !remap_union(dst_member_any, .{ src_member_any, src, src_member })  {
-                log("Error: failed while remapping struct member (union) %!", dst_member.name);
+        if is_union_type(it_info.type) {
+            if !remap_union(it, .{ src_member, src, src_member_info })  {
+                log("Error: failed while remapping struct member (union) %!", it_info.name);
                 return false;
             }
         } else {
             // TODO: what if src is union, but dst is not?
-            if !any_to_any(dst_member_any, src_member_any)  {
-                log("Error: failed while remapping struct member %!", dst_member.name);
+            if !any_to_any(it, src_member)  {
+                log("Error: failed while remapping struct member %!", it_info.name);
                 return false;
             }
         }
-    }
+    });
     
     return true;
 }
@@ -362,8 +335,8 @@ remap_union :: (dst: Any, src: Any_With_Context) -> bool {
     settings := context.conversion_settings;
     
     assert(dst.type.type == .STRUCT);
-    dst_ti := dst.type.(*Type_Info_Struct);
-    assert(dst_ti.textual_flags & .UNION == .UNION);
+    dst_struct_info := dst.type.(*Type_Info_Struct);
+    assert(dst_struct_info.textual_flags & .UNION == .UNION);
     
     if !is_allowed(.REMAP_UNION) {
         log_unsupported_conversion(.REMAP_UNION, "remap_struct");
@@ -371,7 +344,7 @@ remap_union :: (dst: Any, src: Any_With_Context) -> bool {
     }
     
     // TODO: probably should support this, shouldn't be too hard
-    if !is_union_type(src.data.type) {
+    if !is_union_type(src.type) {
         log("Error: Conversion from non-union type to union is not supported.");
         return false;
     }
@@ -389,15 +362,13 @@ remap_union :: (dst: Any, src: Any_With_Context) -> bool {
     
     // search for dst member matching src member
     last_dst_member_offset := -1;
-    for dst_member: dst_ti.members {
+    for dst_member: dst_struct_info.members {
         if dst_member.flags & .CONSTANT  continue;
         if dst_member.name == src_member.name {
-            if !any_to_any(
+            return any_to_any(
                 Any.{ dst_member.type, dst.value_pointer + dst_member.offset_in_bytes }, 
-                Any.{ src_member.type, src.data.value_pointer + src_member.offset_in_bytes }
-            )  return false;
-            
-            return true;
+                Any.{ src_member.type, src.value_pointer + src_member.offset_in_bytes }
+            );
         }
     }
     
@@ -513,7 +484,8 @@ remap_array :: (dst: Any, src: Any) -> bool {
         //       otherwise, we assume that user pre-allocated a set amount of space.
         if raw_array.data == null {
             assert(raw_array.count == 0, "dst_count was %", raw_array.count);
-            resize(dst_array, src_count, initialize = true);
+            resize(dst_array, src_count);
+            memset(raw_array.data, 0, src_count * dst_array.element_type.runtime_size);
         } else {
             log("Warning: array view data was non-null in remap_array: data %, count %", raw_array.data, raw_array.count);
         }
@@ -1136,140 +1108,9 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
 }
 
 
-// ========== Resolving Unions ==========
-
-/*
-    For use in cases where a union's type is determined by some tag in the parent struct.
-    
-    Some_Struct :: struct {
-        union_type: enum  { ... };
-        some_union: union { ... };
-    }
-    
-    TODO: write a proc to generate the lookup Resolve_Union_By_Tag_Data for Tagged_Union
-    
-    I should document this because I forgot it and then had to figure out why I did it this way again...
-    So the reason there's a union_info passed in here is because we can't actually match on src type, since it may be some dynamically loaded type info
-    So we want to match the dst union type to what is in the user data and then just verify that the src type is also a union
-    In cases where we know we can use src type, we will just have to pass it as union_info as well
-*/
-resolve_union_by_external_tag : Resolve_Union_Proc : (union_info: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
-    user_data := data.(*Resolve_Union_By_Tag_Data);
-    
-    if union_info != user_data.union_type  return null;
-    if src.parent.value_pointer == null  return null;
-    if data                     == null  return null;
-    
-    src_ti := src.data.type.(*Type_Info_Struct);
-    assert(src_ti.type == .STRUCT);
-    assert(src_ti.textual_flags & .UNION == .UNION);
-    
-    dst_tag_any := Any_Number.{ user_data.tag_type };
-    
-    src_tag_field := get_field(xx src.parent.type, user_data.tag_member_name);
-    src_tag_any   := get_member_any(src.parent.value_pointer, src_tag_field);
-    if !any_to_any(dst_tag_any, src_tag_any)  return null;
-    
-    src_member_name: string;
-    for user_data.lookup {
-        if it.tag_value == dst_tag_s64.value_number {
-            src_member_name = it.member_name;
-            break;
-        }
-    }
-    if !src_member_name  return null;
-    
-    for *src_member: src_ti.members {
-        if src_member.flags & .CONSTANT  continue;
-        if src_member.name == src_member_name {
-            return src_member;
-        }
-    }
-    
-    return null;
-}
-
-/*
-    For when all union members share some common base type, and that base type contains the type tag for the union.
-    
-    Entity_Type :: enum { .KNIGHT; .GOBLIN; ... };
-    Entity_Base :: struct {
-        entity_type:    Entity_Type;
-        health:         int;
-        ...
-    }
-    Knight :: struct { 
-        using #as base: Entity_Base;
-        ...
-    }
-    Goblin :: struct { 
-        using #as base: Goblin;
-        ...
-    }
-    Entity_Union :: union {
-        using #as base: Entity_Base;
-        knight:         Knight;
-        goblin:         Goblin;
-        ...
-    }
-    
-    resolve_entity_union_data := Resolve_Union_By_Tag_Data.{ "type", type_info(Entity_Union), type_info(Entity_Type), .[
-        .{ #run Number_Union.from(Entity_Type.KNIGHT),  "knight" },
-        .{ #run Number_Union.from(Entity_Type.GOBLIN),  "goblin" },
-    ]};
-    array_add(*context.conversion_settings.get_union_type_procs, .{ resolve_union_by_tag, resolve_entity_union_data });
-    
-    
-    The need to use a #run on Number_Union.from() is less than ideal, but I have more confidence after switching 
-        to using the Number_Union that the code is correct and won't fail for enums with smaller backing integer sizes.
-    And the rest of this is also not really ideal anyhow, so I'm not gonna worry about making it 2% nicer 
-        until I figure out a way to make the 98% of union remapping less clunky and horrible.
-*/
-resolve_union_by_internal_tag : Resolve_Union_Proc : (union_info: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
-    user_data := data.(*Resolve_Union_By_Tag_Data);
-    
-    if union_info != user_data.union_type  return null;
-    if data == null  return null;
-    
-    src_ti := src.data.type.(*Type_Info_Struct);
-    assert(src_ti.type == .STRUCT);
-    assert(src_ti.textual_flags & .UNION == .UNION);
-    
-    dst_tag_any := Any_Number.{ type = user_data.tag_type };
-    
-    src_tag_field := get_field(xx src.data.type, user_data.tag_member_name);
-    src_tag_any   := get_member_any(src.data.value_pointer, src_tag_field);
-    if !any_to_any(dst_tag_any, src_tag_any)  return null;
-    
-    src_member_name: string;
-    for user_data.lookup {
-        if it.tag_value == dst_tag_any.value {
-            src_member_name = it.member_name;
-            break;
-        }
-    }
-    if !src_member_name  return null;
-    
-    for *src_member: src_ti.members {
-        if src_member.flags & .CONSTANT  continue;
-        if src_member.name == src_member_name {
-            return src_member;
-        }
-    }
-    
-    return null;
-}
-
-Resolve_Union_By_Tag_Data :: struct {
-    tag_member_name:    string;
-    tag_type:           *Type_Info_Enum;
-    union_type:         *Type_Info;
-    lookup:             [] struct { tag_value: Number_Union; member_name: string; };
-}
-
-
-
 #scope_module
+
+#load "union.jai";
 
 #import "Basic";
 #import "Reflection";

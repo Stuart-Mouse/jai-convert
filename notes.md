@@ -36,6 +36,25 @@ verify and clarify functionality of conversion settings
 
 Everything below here is gonna just be really messy notes
 
+
+
+### general considerations
+
+
+how useful are most of the options in allowed conversions?
+    most of the time user jsut wants .ALL or not to od the allocating ones
+    probably fine to leave it more granular, but we really do just need ot figure out the allocator stuff for both this and GON
+    
+
+should we really use arrays of callbacks for union resolution and user remappings?
+    if we do something like IO data, maybe we can clean these up for things that actually pertain to specific types, 
+    and then we can provide just a single callback proc on the context struct for actual special case handling
+
+
+the current union situation is really gross
+    but then again for remapping from an Any where we don't have the concrete type to cast to means it's just gonna be kinda gross no matter what
+
+
 ### remap_array 
 
 
