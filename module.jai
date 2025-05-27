@@ -90,9 +90,7 @@ Conversion_Settings :: struct {
     float_rounding_mode:    Float_Rounding_Mode;
     pointer_recast_procs:   [..] struct { proc: Pointer_Recast_Proc; data: *void; };
     get_union_type_procs:   [..] struct { proc: Resolve_Union_Proc;  data: *void; };
-    
-    // TODO: add callback data pointer
-    any_to_any_callback:    #type (dst: Any, src: Any) -> handled: bool, ok: bool; // if handled is false, ok is ignored.
+    user_remap_procs:       [..] struct { proc: User_Remap_Proc;     data: *void; };
     
     // TODO: probably add some more in-depth rules for struct remapping.
     //       and probably allow overloading these on a per-struct basis
@@ -107,14 +105,13 @@ Conversion_Settings :: struct {
 Pointer_Recast_Proc :: #type (ptr: Any_With_Context, user_data: *void) -> (Any, bool);
 
 // Union types are resolved by returning the type info struct member for the union member that is valid.
-// The union_ti parameter is used during remapping to pass the type info for the dst union's type info, 
+// The union_info parameter is used during remapping to pass the type info for the dst union's type info, 
 //     since we usually want to match on this rather than on the src type (which is probably dynamically loaded type info).
-Resolve_Union_Proc :: #type (union_ti: *Type_Info, src: Any_With_Context, user_data: *void) -> *Type_Info_Struct_Member;
+Resolve_Union_Proc :: #type (union_info: *Type_Info, src: Any_With_Context, user_data: *void) -> *Type_Info_Struct_Member;
 
+User_Remap_Proc_Result :: enum { ERROR; UNHANDLED; HANDLED; }
+User_Remap_Proc :: #type (dst: Any, src: Any, user_data: *void) -> User_Remap_Proc_Result;
 
-// TODO: generalized remap callback that will completely override remapping for a given dst type
-//       peraps that was even th emore wise/simple way to go for unions, but whatever
-//       if we did that generally for unions, we would have to always pass src_parent to any_to_any
 
 // TODO: consider also casting up to more general type? This is more of something we can do in a LUT I think.
 
@@ -165,14 +162,14 @@ any_to_any :: (_dst: Any, _src: Any) -> bool {
     dst := _dst;
     src := _src;
     
-    callback := context.conversion_settings.any_to_any_callback;
-    if callback {
-        handled, ok := callback(dst, src);
-        if handled  return ok;
+    for context.conversion_settings.user_remap_procs {
+        if it.proc(dst, src, it.data) == {
+          case .UNHANDLED;  // no op
+          case .HANDLED;    return true;
+          case .ERROR;      return false;
+        }
     }
     
-    // TODO: allow user to callback on dst and src types before unwrapping variants.
-    //       maybe even check for special handling each time we unwrap nested variants?
     // NOTE: the loops are there because I assumed variants could be nested, but maybe this is not the case..?
     while dst.type.type == .VARIANT { dst.type = dst.type.(*Type_Info_Variant).variant_of; }
     while src.type.type == .VARIANT { src.type = src.type.(*Type_Info_Variant).variant_of; }
@@ -675,7 +672,7 @@ remap_enum :: (dst: Any, src: Any) -> bool {
 }
 
 any_to_int :: (dst: Any, src: Any) -> bool {
-    settings := *context.conversion_settings;
+    settings := context.conversion_settings;
     
     assert(dst.type.type == .INTEGER);
     
@@ -1199,14 +1196,14 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
     TODO: write a proc to generate the lookup Resolve_Union_By_Tag_Data for Tagged_Union
     
     I should document this because I forgot it and then had to figure out why I did it this way again...
-    So the reason there's a union_ti passed in here is because we can't actually match on src type, since it may be some dynamically loaded type info
+    So the reason there's a union_info passed in here is because we can't actually match on src type, since it may be some dynamically loaded type info
     So we want to match the dst union type to what is in the user data and then just verify that the src type is also a union
-    In cases where we know we can use src type, we will just have to pass it as union_ti as well
+    In cases where we know we can use src type, we will just have to pass it as union_info as well
 */
-resolve_union_by_external_tag : Resolve_Union_Proc : (union_ti: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
+resolve_union_by_external_tag : Resolve_Union_Proc : (union_info: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
     user_data := data.(*Resolve_Union_By_Tag_Data);
     
-    if union_ti != user_data.union_type  return null;
+    if union_info != user_data.union_type  return null;
     if src.parent.value_pointer == null  return null;
     if data                     == null  return null;
     
@@ -1275,10 +1272,10 @@ resolve_union_by_external_tag : Resolve_Union_Proc : (union_ti: *Type_Info, src:
     And the rest of this is also not really ideal anyhow, so I'm not gonna worry about making it 2% nicer 
         until I figure out a way to make the 98% of union remapping less clunky and horrible.
 */
-resolve_union_by_internal_tag : Resolve_Union_Proc : (union_ti: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
+resolve_union_by_internal_tag : Resolve_Union_Proc : (union_info: *Type_Info, src: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
     user_data := data.(*Resolve_Union_By_Tag_Data);
     
-    if union_ti != user_data.union_type  return null;
+    if union_info != user_data.union_type  return null;
     if data == null  return null;
     
     src_ti := src.data.type.(*Type_Info_Struct);
