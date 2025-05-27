@@ -27,7 +27,7 @@ resolve_union_by_external_tag : Resolve_Union_Proc : (union_info: *Type_Info, sr
     dst_tag := Any_Number.{ user_data.tag_type };
     
     src_tag_field := get_field(xx src.parent.type, user_data.tag_member_name);
-    src_tag_any   := get_member_any(src.parent.value_pointer, src_tag_field);
+    src_tag_any   := get_member_any(src.parent, src_tag_field);
     if !remap_enum(to_any(*dst_tag), src_tag_any)  return null;
     
     src_member_name: string;
@@ -97,7 +97,8 @@ resolve_union_by_internal_tag : Resolve_Union_Proc : (union_info: *Type_Info, sr
     dst_tag := Any_Number.{ type = user_data.tag_type };
     
     src_tag_field := get_field(xx src.type, user_data.tag_member_name);
-    src_tag_any   := get_member_any(src.value_pointer, src_tag_field);
+    src_tag_any   := get_member_any(src.any, src_tag_field);
+    
     if !remap_enum(to_any(*dst_tag), src_tag_any)  return null;
     
     src_member_name: string;

@@ -203,14 +203,11 @@ any_to_any :: (_dst: Any, _src: Any) -> bool {
       case .FLOAT;
         return any_to_float(dst, src);
         
-      case .STRUCT;
-        // currently, we only do struct -> struct
-        // maybe in the future we will allow other types to coerce to structs
-        if src.type.type != dst.type.type  return false; 
-        return remap_struct(dst, src);
-        
       case .ENUM;
         return remap_enum(dst, src);
+        
+      case .STRUCT;
+        return remap_struct(dst, src);
         
       case .ARRAY;
         return remap_array(dst, src);
@@ -261,8 +258,12 @@ any_to_any :: (_dst: Any, _src: Any) -> bool {
 }
 
 remap_struct :: (dst: Any, src: Any) -> bool {
-    assert(src.type.type == .STRUCT);
     assert(dst.type.type == .STRUCT);
+    if src.type.type != .STRUCT  return false;
+    
+    if is_union_type(dst.type) {
+        return remap_union(dst, .{ any = src });
+    }
     
     if !is_allowed(.REMAP_STRUCT) {
         log_unsupported_conversion(.REMAP_STRUCT, "remap_struct");
@@ -293,6 +294,7 @@ remap_struct :: (dst: Any, src: Any) -> bool {
         if src_member_info.flags & .CONSTANT  continue;
         
         src_member := get_member_any(src, src_member_info);
+        assert(src_member.type != null);
         
         if is_union_type(it_info.type) {
             if !remap_union(it, .{ src_member, src, src_member_info })  {
@@ -301,6 +303,7 @@ remap_struct :: (dst: Any, src: Any) -> bool {
             }
         } else {
             // TODO: what if src is union, but dst is not?
+            log("it_info.name: %", it_info.name);
             if !any_to_any(it, src_member)  {
                 log("Error: failed while remapping struct member %!", it_info.name);
                 return false;
@@ -311,32 +314,23 @@ remap_struct :: (dst: Any, src: Any) -> bool {
     return true;
 }
 
-// union is just a struct where we want to only copy one member
-// if we map one union to another, we actually want to map by the name of union member
-// so we could just do a remap_struct, with an extra parameter for union_member, passing the 
-
-
 /*
-    Remapping Unions
+    NOTE: 
+    On its own, remap_union cannot actually figure out which union member is valid. 
+    For that, a user callback must be provided in context.conversion_settings.get_union_type_procs.
+    See union.jai for some relevant helper procs and examples.
     
-    sometimes, the union itself contains all of the necessary information required to figure out the union should be treated as.
-    (e.g.: a union of Entity types where all members of union contain the same base type as first member)
-    
-    But, many times we require more context, either in the form of an external type tag or enum value.
-    If the parent_any is not provided, then 
-    
-    
-    The parent Any may not be provided in the user callback, so the user needs to be aware of this and handle this case.
-    src_member_ti will be provided if and only if src_parent is provided
-    
-    TODO: should we pass Data with context for src data here? yes
+    // TODO: dst really should be an Any_With_Context as well so that the resolve_union_proc can set an external tag accordingly (if need be).
+             (technically, this doesn't need to be the case as an external tag should already be set by remapping the parent struct, but it seems wise to set the value explicitly...)
 */
-remap_union :: (dst: Any, src: Any_With_Context) -> bool {
+remap_union :: (dst: Any, src_with_ctxt: Any_With_Context) -> bool {
     settings := context.conversion_settings;
     
-    assert(dst.type.type == .STRUCT);
     dst_struct_info := dst.type.(*Type_Info_Struct);
-    assert(dst_struct_info.textual_flags & .UNION == .UNION);
+    assert(is_union_type(dst_struct_info));
+    
+    // to help prevent confusion
+    src := src_with_ctxt.any;
     
     if !is_allowed(.REMAP_UNION) {
         log_unsupported_conversion(.REMAP_UNION, "remap_struct");
@@ -349,29 +343,25 @@ remap_union :: (dst: Any, src: Any_With_Context) -> bool {
         return false;
     }
     
-    src_member: *Type_Info_Struct_Member;
+    src_member_info: *Type_Info_Struct_Member;
     for settings.get_union_type_procs {
-        src_member = it.proc(dst.type, src, it.data);
-        if src_member  break;
+        src_member_info = it.proc(dst.type, src_with_ctxt, it.data);
+        if src_member_info  break;
     }
-    if !src_member  {
+    if !src_member_info  {
         // log("Warning: failed to resolve union member in remap_struct.");
         return true;
     }
-    assert(src_member.flags & .CONSTANT == 0);
+    assert(src_member_info.flags & .CONSTANT == 0);
     
-    // search for dst member matching src member
-    last_dst_member_offset := -1;
-    for dst_member: dst_struct_info.members {
-        if dst_member.flags & .CONSTANT  continue;
-        if dst_member.name == src_member.name {
-            return any_to_any(
-                Any.{ dst_member.type, dst.value_pointer + dst_member.offset_in_bytes }, 
-                Any.{ src_member.type, src.value_pointer + src_member.offset_in_bytes }
-            );
-        }
+    src_member := get_member_any(src, src_member_info);
+    dst_member := get_member_any(dst, src_member_info.name);
+    
+    if dst_member.type {
+        return any_to_any(dst_member, src_member);
     }
     
+    // log that dst member was not found?
     return true; // TODO?
 }
 
@@ -755,6 +745,8 @@ int_to_int :: (dst: Any, src: Any, should_clamp := false) -> bool {
     
     // don't just compare type info pointers directly because we may be using external type infos
     if src_ti.signed == dst_ti.signed && src_ti.runtime_size == dst_ti.runtime_size {
+        log("dst.value_pointer: %", dst.value_pointer);
+        log("src.value_pointer: %", src.value_pointer);
         memcpy(dst.value_pointer, src.value_pointer, dst_ti.runtime_size);
         return true;
     }
