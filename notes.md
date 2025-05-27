@@ -80,3 +80,21 @@ if dst is
             should we do some lookup on array type that user specifies?
             should it be handled in a callback?
             we can't copy the allocator from src, because that's a pointer which will not be valid if src was from a file
+
+
+
+### pointer stuff
+
+pointer recasting considerations are a bit different than in the dat packer, since we have to think about both src and dst
+
+maybe we want to recast both pointers up to some common base type
+maybe we want to cast just one or the other 
+
+need to know 
+
+
+also procedure pointers
+    probably just leave this entirely up to user, have not even though of a need for this other than in combination with data packer
+    but for that use case I will probably just do some local data pointer thing and skip Convert.jai entirely
+    
+    

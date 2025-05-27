@@ -88,39 +88,26 @@ Float_Rounding_Mode :: enum { TRUNCATE; FLOOR; CEILING; /*NEAREST;*/ };
 Conversion_Settings :: struct {
     allowed_conversions:    Conversion_Types;
     float_rounding_mode:    Float_Rounding_Mode;
-    pointer_recast_procs:   [..] struct { proc: Pointer_Recast_Proc; data: *void; };
+    
     get_union_type_procs:   [..] struct { proc: Resolve_Union_Proc;  data: *void; };
     user_remap_procs:       [..] struct { proc: User_Remap_Proc;     data: *void; };
     
-    // TODO: probably add some more in-depth rules for struct remapping.
-    //       and probably allow overloading these on a per-struct basis
-    //       maybe we check for certain notes on the struct/members?
-    //       we could use notes for some aspects of arrays (views owning data, allocator for resizable arrays) idk
-    //       better than notes would actually be just using the member data LUT thing I do in GON parser. (though this is still cope for not having structured notes)
+    // should this just be a flag in Conversion_Types? Or should we make a separate flags member for things like this?
+    // or, maybe we just change the function of INT_NARROWING to permit clamping?   I dunno...
+    clamp_int_to_int:       bool;
+    
+    // TODO: maybe add something like IO Data from GON so user can override certain behavior without the need for user remap procs.
 }
 
-// the Any's passed in and out must be pointers
-// returns true if the type has been recast, false if not
-// this is only for casting down to a more specific type (e.g.: casting a *Type_Info down to a *Type_Info_Enum)
-Pointer_Recast_Proc :: #type (ptr: Any_With_Context, user_data: *void) -> (Any, bool);
-
 // Union types are resolved by returning the type info struct member for the union member that is valid.
-// The union_info parameter is used during remapping to pass the type info for the dst union's type info, 
-//     since we usually want to match on this rather than on the src type (which is probably dynamically loaded type info).
+// The union_info parameter is used during remapping to pass the dst union's type info, since we usually want to match on this rather than on the src type.
 Resolve_Union_Proc :: #type (union_info: *Type_Info, src: Any_With_Context, user_data: *void) -> *Type_Info_Struct_Member;
 
 User_Remap_Proc_Result :: enum { ERROR; UNHANDLED; HANDLED; }
 User_Remap_Proc :: #type (dst: Any, src: Any, user_data: *void) -> User_Remap_Proc_Result;
 
 
-// TODO: consider also casting up to more general type? This is more of something we can do in a LUT I think.
-
-// TODO: also consider what to do about procedure pointers
-//       maybe we can give user a way to store procedures as a string or enum value in data packer, then deconvert on parse?
-//       or we can use another flag to denote proc pointer in Packed_Pointer_Flags and let the user map other 32 bits to a proc pointer
-//       we may not need to use a bitflag in in packed pointer, since we can already differentiate pointer from procedure in type info.
-//       but maybe that's just easier anyhow?
-
+#scope_file
 is_allowed :: inline (conversion_type: Conversion_Types) -> bool { 
     return context.conversion_settings.allowed_conversions & conversion_type == conversion_type;
 }
@@ -132,16 +119,18 @@ log_disallowed_conversion :: inline (conversion: Conversion_Types, proc_name: st
 log_unsupported_conversion :: inline (conversion: Conversion_Types, proc_name: string, loc := #caller_location) {
     log("Error: unsupported conversion % in % (line: %)", conversion, proc_name, loc.line_number);
 }
+#scope_export
 
-/*
-    TODO: explain/document this structure better
-*/
+
+// TODO: explain/document this structure better
 Any_With_Context :: struct {
-    data:                 Any;
+    data:                 Any;                        // unfortunately cannot put a 'using' on an Any...
     parent:               Any;                        // if data is a struct member or array element, this points to the struct or array.
     struct_member_info:   *Type_Info_Struct_Member;   // if data is a struct member, this is the info for that. may be null.
 }
 
+
+// ========== Remapping Procedures ==========
 
 // convenience proc for doing conversions more inline with a static dst type
 any_to :: inline ($T: Type, src: Any) -> T, bool {
@@ -333,7 +322,7 @@ remap_struct :: (dst: Any, src: Any) -> bool {
         src_member_any := Any.{ src_member.type, src.value_pointer + src_member.offset_in_bytes };
         
         if is_union_type(dst_member.type) {
-            if !remap_union(dst_member_any, src_member_any, src, src_member)  {
+            if !remap_union(dst_member_any, .{ src_member_any, src, src_member })  {
                 log("Error: failed while remapping struct member (union) %!", dst_member.name);
                 return false;
             }
@@ -367,9 +356,9 @@ remap_struct :: (dst: Any, src: Any) -> bool {
     The parent Any may not be provided in the user callback, so the user needs to be aware of this and handle this case.
     src_member_ti will be provided if and only if src_parent is provided
     
-    TODO: should we pass Data with context for src data here?
+    TODO: should we pass Data with context for src data here? yes
 */
-remap_union :: (dst: Any, src: Any, src_parent: Any, src_member_info: *Type_Info_Struct_Member) -> bool {
+remap_union :: (dst: Any, src: Any_With_Context) -> bool {
     settings := context.conversion_settings;
     
     assert(dst.type.type == .STRUCT);
@@ -382,14 +371,14 @@ remap_union :: (dst: Any, src: Any, src_parent: Any, src_member_info: *Type_Info
     }
     
     // TODO: probably should support this, shouldn't be too hard
-    if !is_union_type(src.type) {
+    if !is_union_type(src.data.type) {
         log("Error: Conversion from non-union type to union is not supported.");
         return false;
     }
     
     src_member: *Type_Info_Struct_Member;
     for settings.get_union_type_procs {
-        src_member = it.proc(dst.type, .{ src, src_parent, src_member_info }, it.data);
+        src_member = it.proc(dst.type, src, it.data);
         if src_member  break;
     }
     if !src_member  {
@@ -405,7 +394,7 @@ remap_union :: (dst: Any, src: Any, src_parent: Any, src_member_info: *Type_Info
         if dst_member.name == src_member.name {
             if !any_to_any(
                 Any.{ dst_member.type, dst.value_pointer + dst_member.offset_in_bytes }, 
-                Any.{ src_member.type, src.value_pointer + src_member.offset_in_bytes }
+                Any.{ src_member.type, src.data.value_pointer + src_member.offset_in_bytes }
             )  return false;
             
             return true;
@@ -419,99 +408,83 @@ remap_union :: (dst: Any, src: Any, src_parent: Any, src_member_info: *Type_Info
 // TODO: consider how allocators / allocations should work and what settings to implement
 // Shallow copy vs deep copy options?
 remap_array :: (dst: Any, src: Any) -> bool {
-    /*
-        remap_array is probably the most complex remapping case, since we need to handle not only the three array types, 
-            but we also support remapping a single-element of a given type T to an array with element type T.
-        
-        Because of this, we need to pull out the type, value_pointer, and element_type from dst and src, 
-            and then manually override those in certain cases. 
-        So for the sake of keeping the code legible, dst and src should not be used directly at all beyond this header section.
-    */
-    
-    // NOTE: src does not necessarily have to be an array here
-    assert(dst.type.type == .ARRAY);
-    
-    
-    // TODO: we can probably clean up a lot of these extra variables by just creating a new Type_Info_Array on the stack for src which is a copy of the src type info, and then modifying it as needed.
-    //       but since we may get various src type infos, perhaps we need an Any_Type_Info which has union space for any type info we could get...
-    
-    src_type := src.type;
-    dst_type := dst.type.(*Type_Info_Array);
-    
-    src_value_pointer := src.value_pointer;
-    dst_value_pointer := dst.value_pointer;
-    
-    src_element_type: *Type_Info; // we figure this out later, once we can be sure src_type is an array
-    dst_element_type := dst_type.element_type;
-    
-    src_array_type: Type_Info_Array.Array_Type;
-    
-    conversion_type := Conversion_Types.UNKNOWN_CONVERSION;
+    dst_array := Any_Array.from(dst);  // asserts that dst is actually an array type 
     
     // remap string to array of u8
-    if src_type.type == .STRING {
+    if src.type.type == .STRING {
         if !is_allowed(.STRING_TO_ARRAY) {
-            log_disallowed_conversion (conversion_type, "remap_array");
+            log_disallowed_conversion (.STRING_TO_ARRAY, "remap_array");
             return false;
         }
         
-        if dst_type.element_type.runtime_size != 1 {
-            log("Error: cannot convert from string to %.", as_type(dst_type));
+        if dst_array.element_type.runtime_size != 1 {
+            log("Error: cannot convert from string to %.", as_type(dst_array.array_info));
         }
         
-        src_string_pointer := src_value_pointer.(*string);
-        if dst_type.array_type == {
+        src_string_pointer := src.value_pointer.(*string);
+        if dst_array.array_type == {
           case .FIXED;
-            count := min(dst_type.array_count, src_string_pointer.count);
-            memcpy(dst_value_pointer, src_string_pointer.data, count);
+            count := min(dst_array.array_count, src_string_pointer.count);
+            memcpy(dst_array.value_pointer, src_string_pointer.data, count);
           case .VIEW;
             // TODO: this just overwrites the existing value without checking... perhaps we should not do that...
             // TODO: we would like to have an option as to whether this should copy
-            dst_value_pointer.(*string).* = copy_string(src_string_pointer.*);
+            dst_array.value_pointer.(*string).* = copy_string(src_string_pointer.*);
           case .RESIZABLE;
-            array := dst_value_pointer.(*[..]u8);
+            array := dst_array.value_pointer.(*[..]u8);
             array_add(array, ..src_string_pointer.(*[]u8).*);
         }
         return true;
     }
     
-    // now we determine src_element_type and conversion_type, as well as get src data and count
-    src_count: int   = ---;
-    src_data:  *void = ---;
     
-    if src_type.type == .ARRAY {
-        src_element_type    = src_type.(*Type_Info_Array).element_type;
-        src_array_type      = src_type.(*Type_Info_Array).array_type;
-        src_count, src_data = get_array_count_and_data(src_value_pointer, xx src_type);
+    // src_array has to be constructed manually, since src may not actually be an array in the first place
+    // we also create a Type_Info_Array on the stack here so that we can just make up a new type if need be
+    src_array_info: Type_Info_Array;
+    src_array := Any_Array.{
+        array_info    = *src_array_info,
+        value_pointer = src.value_pointer,
+    };
+    
+    conversion_type := Conversion_Types.UNKNOWN_CONVERSION;
+    
+    if src.type.type == .ARRAY {
+        // if source type is actually an array, just point at that instead of the made up type
+        src_array.array_info = src.type.(*Type_Info_Array);
     } else {
         // for single-to-array, we treat the one element T as a [1] T
-        conversion_type  = .SINGLE_TO_ARRAY;
-        src_element_type = src_type;
-        src_count        = 1;
-        src_data         = src_value_pointer;
-        src_array_type   = .FIXED;
-    } 
+        conversion_type = .SINGLE_TO_ARRAY;
+        src_array_info = .{
+            type         = .ARRAY,
+            runtime_size = src.type.runtime_size,
+            element_type = src.type,
+            array_type   = .FIXED,
+            array_count  = 1,
+        };
+    }
+    src_count, src_data := get_count_and_data(src_array);
+    
     
     // we OR in the array conversion type since we may have something like `SINGLE_TO_ARRAY | ARRAY_FIXED_TO_VARIABLE` if we are going from `T` to `[] T`
-    if dst_type.array_type == {
+    if dst_array.array_type == {
       case .FIXED;
-        if src_array_type == {
+        if src_array.array_type == {
           case .FIXED; 
             // TODO: we should probably notify the user if fixed array gets widened or truncated
-            if      src_count > dst_type.array_count then conversion_type |= .TRUNCATE_FIXED_ARRAY;
-            else if src_count < dst_type.array_count then conversion_type |= .WIDEN_FIXED_ARRAY;
+            if      src_count > dst_array.array_count then conversion_type |= .TRUNCATE_FIXED_ARRAY;
+            else if src_count < dst_array.array_count then conversion_type |= .WIDEN_FIXED_ARRAY;
             else    conversion_type |= .NO_CONVERSION_REQUIRED;
           case .VIEW;       conversion_type |= .ARRAY_VARIABLE_TO_FIXED;
           case .RESIZABLE;  conversion_type |= .ARRAY_VARIABLE_TO_FIXED;
         }
       case .VIEW;
-        if src_array_type == {
+        if src_array.array_type == {
           case .FIXED;      conversion_type |= .ARRAY_FIXED_TO_VARIABLE;
           case .VIEW;       conversion_type |= .NO_CONVERSION_REQUIRED;
           case .RESIZABLE;  conversion_type |= .ARRAY_RESIZABLE_TO_VIEW;
         }
       case .RESIZABLE;
-        if src_array_type == {
+        if src_array.array_type == {
           case .FIXED;      conversion_type |= .ARRAY_FIXED_TO_VARIABLE; 
           case .VIEW;       conversion_type |= .ARRAY_VIEW_TO_RESIZABLE;
           case .RESIZABLE;  conversion_type |= .NO_CONVERSION_REQUIRED;
@@ -525,48 +498,28 @@ remap_array :: (dst: Any, src: Any) -> bool {
         return false;
     }
     
+    
     // if we have nothing to copy from src, then just return success
     if src_data == null || src_count == 0  return true;
     
     
-    // we have to do a bit more work when getting dst data and count, 
-    // since we actually want to allocate for the view and resizable cases
-    dst_count: int   = ---;
-    dst_data:  *void = ---;
-    
-    if dst_type.array_type == {
-      case .FIXED;
-        dst_data  = dst_value_pointer;
-        dst_count = dst_type.array_count;
+    // maybe allocate for VIEW and RESIZABLE
+    if dst_array.array_type != .FIXED {
+        raw_array := dst_array.value_pointer.(*Resizable_Array);
         
-      case .VIEW;
-        raw_array := dst_value_pointer.(*Array_View_64);
+        // TODO: give the user the ability to set allocators for array views' data
         
         // NOTE: we only allocate new data for the array view if it is currently null, 
         //       otherwise, we assume that user pre-allocated a set amount of space.
         if raw_array.data == null {
             assert(raw_array.count == 0, "dst_count was %", raw_array.count);
-            // TODO: give the user the ability to set allocators for array views' data
-            raw_array.count = src_count;
-            raw_array.data  = alloc(src_count * dst_type.element_type.runtime_size);
-            memset(raw_array.data, 0, src_count * dst_type.element_type.runtime_size);
+            resize(dst_array, src_count, initialize = true);
         } else {
             log("Warning: array view data was non-null in remap_array: data %, count %", raw_array.data, raw_array.count);
         }
-        dst_count = raw_array.count;
-        dst_data  = raw_array.data;
-        
-      case .RESIZABLE;
-        raw_array := dst_value_pointer.(*Resizable_Array);
-        
-        // TODO: should we only reserve space when resizable array is empty, like in .VIEW case above?
-        array_reserve(raw_array, src_count, dst_element_type.runtime_size);
-        assert(raw_array.allocated == src_count);
-        raw_array.count = src_count;
-        
-        dst_count = raw_array.count;
-        dst_data  = raw_array.data;
     }
+    
+    dst_count, dst_data := get_count_and_data(dst_array);
     
     if dst_data == null || dst_count == 0 {
         log("Error: dst array was null or empty in remap_array.");
@@ -575,20 +528,20 @@ remap_array :: (dst: Any, src: Any) -> bool {
     }
     
     
-    // COPY ARRAY DATA
     
     // TODO: probably log some warning when array counts don't match?
-    min_count       := min(src_count, dst_count);
-    src_element_any := Any.{ src_element_type, src_data };
-    dst_element_any := Any.{ dst_element_type, dst_data };
+    if src_count != dst_count {
+        log("Warning: src and dst array count do not match! % vs %", src_count, dst_count);
+    }
+    
+    min_count   := min(src_count, dst_count);
+    src_element := Any.{ src_array.element_type, src_data };
+    dst_element := Any.{ dst_array.element_type, dst_data };
     
     for 0..min_count-1 {
-        if !any_to_any(dst_element_any, src_element_any) {
-            log("Error: unable to remap data");
-            return false;
-        }
-        src_element_any.value_pointer += src_element_type.runtime_size;
-        dst_element_any.value_pointer += dst_element_type.runtime_size;
+        if !any_to_any(dst_element, src_element)  return false;
+        src_element.value_pointer += src_array.element_type.runtime_size;
+        dst_element.value_pointer += dst_array.element_type.runtime_size;
     }
     
     return true;
@@ -596,7 +549,7 @@ remap_array :: (dst: Any, src: Any) -> bool {
 
 // check if we are allowed do it by name, else do it by value
 remap_enum :: (dst: Any, src: Any) -> bool { 
-    settings := *context.conversion_settings;
+    settings := context.conversion_settings;
 
     assert(src.type.type == .ENUM);
     assert(dst.type.type == .ENUM);
@@ -630,12 +583,12 @@ remap_enum :: (dst: Any, src: Any) -> bool {
                 }
             }
             
-            int_to_enum(dst, dst_s64);
+            int_to_enum(dst, dst_s64, settings.clamp_int_to_int);
             return true;
         }
         else {
             src_s64: s64;
-            enum_to_int(src_s64, src);
+            enum_to_int(src_s64, src, settings.clamp_int_to_int);
             
             src_value_name: string;
             for src_ti.values {
@@ -648,7 +601,7 @@ remap_enum :: (dst: Any, src: Any) -> bool {
             if src_value_name {
                 for dst_ti.names {
                     if it == src_value_name {
-                        int_to_enum(dst, dst_ti.values[it_index]);
+                        int_to_enum(dst, dst_ti.values[it_index], settings.clamp_int_to_int);
                         return true;
                     }
                 }
@@ -667,7 +620,7 @@ remap_enum :: (dst: Any, src: Any) -> bool {
         return false;
     }
     
-    enum_to_enum(dst, src);
+    enum_to_enum(dst, src, settings.clamp_int_to_int);
     return true;
 }
 
@@ -684,7 +637,7 @@ any_to_int :: (dst: Any, src: Any) -> bool {
             log_disallowed_conversion(conversion, "any_to_int");
             return false;
         }
-        enum_to_int(dst, src);
+        enum_to_int(dst, src, settings.clamp_int_to_int);
         return true;
         
       case .INTEGER;
@@ -694,7 +647,7 @@ any_to_int :: (dst: Any, src: Any) -> bool {
             log_disallowed_conversion(conversion, "any_to_int");
             return false;
         }
-        return int_to_int(dst, src);
+        return int_to_int(dst, src, settings.clamp_int_to_int);
         
       case .FLOAT; 
         conversion := Conversion_Types.FLOAT_TO_INT;
