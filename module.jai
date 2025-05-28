@@ -128,7 +128,7 @@ Any_With_Context :: struct {
     parent:               Any;                        // if data is a struct member or array element, this points to the struct or array.
     struct_member_info:   *Type_Info_Struct_Member;   // if data is a struct member, this is the info for that. may be null.
     
-    // unfortunately cannot put a 'using' on an Any, so we use a #place and duplicate the members
+    // unfortunately cannot put a 'using' on an Any, so we use a #place and duplicate the members for direct access
     #place any; 
         type: *Type_Info;
         value_pointer: *void;
@@ -274,8 +274,8 @@ remap_struct :: (dst: Any, src: Any) -> bool {
         // TODO: I am probably not handling the case where a using is on a union
         
         // NOTE: get_field searches recursively through usings
-        src_member_info := get_field(xx src.type, it_info.name);
-        if src_member_info == null {
+        found, src_member, src_member_info := get_member(src, it_info.name);
+        if !found {
             /*
                 I'm not sure if this could have unintended side-effects,
                 but the idea here is that if we can't find a match for a member that has a using on it, 
@@ -292,8 +292,6 @@ remap_struct :: (dst: Any, src: Any) -> bool {
             continue;
         }
         if src_member_info.flags & .CONSTANT  continue;
-        
-        src_member := get_member_any(src, src_member_info);
         assert(src_member.type != null);
         
         if is_union_type(it_info.type) {
@@ -303,7 +301,6 @@ remap_struct :: (dst: Any, src: Any) -> bool {
             }
         } else {
             // TODO: what if src is union, but dst is not?
-            log("it_info.name: %", it_info.name);
             if !any_to_any(it, src_member)  {
                 log("Error: failed while remapping struct member %!", it_info.name);
                 return false;
@@ -323,14 +320,14 @@ remap_struct :: (dst: Any, src: Any) -> bool {
     // TODO: dst really should be an Any_With_Context as well so that the resolve_union_proc can set an external tag accordingly (if need be).
              (technically, this doesn't need to be the case as an external tag should already be set by remapping the parent struct, but it seems wise to set the value explicitly...)
 */
-remap_union :: (dst: Any, src_with_ctxt: Any_With_Context) -> bool {
+remap_union :: (dst: Any, src_ctx: Any_With_Context) -> bool {
     settings := context.conversion_settings;
     
     dst_struct_info := dst.type.(*Type_Info_Struct);
     assert(is_union_type(dst_struct_info));
     
     // to help prevent confusion
-    src := src_with_ctxt.any;
+    src := src_ctx.any;
     
     if !is_allowed(.REMAP_UNION) {
         log_unsupported_conversion(.REMAP_UNION, "remap_struct");
@@ -345,7 +342,7 @@ remap_union :: (dst: Any, src_with_ctxt: Any_With_Context) -> bool {
     
     src_member_info: *Type_Info_Struct_Member;
     for settings.get_union_type_procs {
-        src_member_info = it.proc(dst.type, src_with_ctxt, it.data);
+        src_member_info = it.proc(dst.type, src_ctx, it.data);
         if src_member_info  break;
     }
     if !src_member_info  {
@@ -354,10 +351,10 @@ remap_union :: (dst: Any, src_with_ctxt: Any_With_Context) -> bool {
     }
     assert(src_member_info.flags & .CONSTANT == 0);
     
-    src_member := get_member_any(src, src_member_info);
-    dst_member := get_member_any(dst, src_member_info.name);
+    src_member := get_member(src, src_member_info);
+    dst_member_found, dst_member := get_member(dst, src_member_info.name);
     
-    if dst_member.type {
+    if dst_member_found {
         return any_to_any(dst_member, src_member);
     }
     
@@ -745,8 +742,6 @@ int_to_int :: (dst: Any, src: Any, should_clamp := false) -> bool {
     
     // don't just compare type info pointers directly because we may be using external type infos
     if src_ti.signed == dst_ti.signed && src_ti.runtime_size == dst_ti.runtime_size {
-        log("dst.value_pointer: %", dst.value_pointer);
-        log("src.value_pointer: %", src.value_pointer);
         memcpy(dst.value_pointer, src.value_pointer, dst_ti.runtime_size);
         return true;
     }
