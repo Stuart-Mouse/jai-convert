@@ -334,9 +334,14 @@ remap_union :: (dst: Any, src_ctx: Any_With_Context) -> bool {
         return false;
     }
     
-    // TODO: probably should support this, shouldn't be too hard
+    // NOTE: this feature is not be usable when remapping from dynamically generated type infos to native type infos, as we do in data packer, since the type infos muct be an exact match
     if !is_union_type(src.type) {
-        log("Error: Conversion from non-union type to union is not supported.");
+        if union_contains_type(dst_struct_info, src.type) {
+            // TODO: should we just shallowly memcpy since types match exactly?
+            //       the fact that I have to ask this means allocations are too confusing right now...
+            return any_to_any(Any.{ src.type, dst.value_pointer }, src);
+        }
+        log("Error: unable to remap type % to %. src type is not a member of dst union.", );
         return false;
     }
     
