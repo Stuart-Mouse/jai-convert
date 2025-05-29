@@ -28,7 +28,7 @@ verify and clarify functionality of conversion settings
 
 ### Built-In Support for Tagged_Union
 
-
+should just be a matter of putting a #run inside the struct body which generates the proper lookup table and adds the proper data to get_union_type_procs
 
 
 

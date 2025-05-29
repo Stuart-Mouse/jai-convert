@@ -266,14 +266,15 @@ remap_struct :: (dst: Any, src: Any) -> bool {
     }
     
     if !is_allowed(.REMAP_STRUCT) {
-        log_unsupported_conversion(.REMAP_STRUCT, "remap_struct");
+        log_disallowed_conversion(.REMAP_STRUCT, "remap_struct");
         return false;
     }
     
     iterate_struct_members(dst, .SKIP_CONSTANT | .SKIP_PLACE, #code {
-        // TODO: I am probably not handling the case where a using is on a union
+        // TODO: I am probably not properly handling the case where a using is on a union
         
-        // NOTE: get_field searches recursively through usings
+        // NOTE: get_member calls get_field, which searches recursively through usings
+        //       maybe we should make this a parameter so that we can toggle this behavior
         found, src_member, src_member_info := get_member(src, it_info.name);
         if !found {
             /*
@@ -292,7 +293,6 @@ remap_struct :: (dst: Any, src: Any) -> bool {
             continue;
         }
         if src_member_info.flags & .CONSTANT  continue;
-        assert(src_member.type != null);
         
         if is_union_type(it_info.type) {
             if !remap_union(it, .{ src_member, src, src_member_info })  {
@@ -341,7 +341,7 @@ remap_union :: (dst: Any, src_ctx: Any_With_Context) -> bool {
             //       the fact that I have to ask this means allocations are too confusing right now...
             return any_to_any(Any.{ src.type, dst.value_pointer }, src);
         }
-        log("Error: unable to remap type % to %. src type is not a member of dst union.", );
+        log("Error: unable to remap type % to %. src type is not a member of dst union.", as_type(src.type), as_type(dst.type));
         return false;
     }
     
@@ -376,7 +376,7 @@ remap_array :: (dst: Any, src: Any) -> bool {
     // remap string to array of u8
     if src.type.type == .STRING {
         if !is_allowed(.STRING_TO_ARRAY) {
-            log_disallowed_conversion (.STRING_TO_ARRAY, "remap_array");
+            log_disallowed_conversion(.STRING_TO_ARRAY, "remap_array");
             return false;
         }
         
