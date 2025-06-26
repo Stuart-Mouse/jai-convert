@@ -20,7 +20,7 @@ provide examples of various types of conversions, with both passing and failing 
 
 Need to document the conversion settings much better, and update the readme for that
     document how conversion settings should be pushed in the context (since it's by pointer, need valid storage duration for settings struct)
-
+        maybe this should be changed...
 
 ### Conversion Settings
 
@@ -35,6 +35,24 @@ should just be a matter of putting a #run inside the struct body which generates
 ## Implementation Notes
 
 Everything below here is gonna just be really messy notes
+
+
+
+
+### IO data 
+
+#### Allocators
+
+get_allocator proc accepts dst as Any
+that way a single callback can be used for multiple types if so desired
+
+#### Pointer Recasting
+
+get any with context?
+
+#### Custom Remapping
+
+get any with context?
 
 
 
@@ -104,7 +122,7 @@ if dst is
 
 ### pointer stuff
 
-pointer recasting considerations are a bit different than in the dat packer, since we have to think about both src and dst
+pointer recasting considerations are a bit different than in the data packer, since we have to think about both src and dst
 
 maybe we want to recast both pointers up to some common base type
 maybe we want to cast just one or the other 
