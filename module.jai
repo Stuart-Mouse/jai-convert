@@ -705,13 +705,11 @@ any_to_bool :: (dst: Any, src: Any) -> bool {
         
       case .ENUM; #through;
       case .INTEGER;
-        ptr := (*src.value_pointer).(*u8);
-        for 0..src.type.runtime_size-1 {
-            if ptr.* != 0 {
-                dst.value_pointer.(*bool).* = true;
-                break;
-            }
-            ptr += 1;
+        if src.type.runtime_size == {
+            case 1; dst.value_pointer.(*bool).* = src.value_pointer.(*u\8).* != 0;
+            case 2; dst.value_pointer.(*bool).* = src.value_pointer.(*u16).* != 0;
+            case 4; dst.value_pointer.(*bool).* = src.value_pointer.(*u32).* != 0;
+            case 8; dst.value_pointer.(*bool).* = src.value_pointer.(*u64).* != 0;
         }
         return true;
         
