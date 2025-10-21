@@ -14,20 +14,20 @@
     So we want to match the dst union type to what is in the user data and then just verify that the src type is also a union
     In cases where we know we can use src type, we will just have to pass it as union_info as well
 */
-resolve_union_by_external_tag : Resolve_Union_Proc : (union_info: *Type_Info, src_ctx: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
+resolve_union_by_external_tag : Resolve_Union_Proc : (union_info: *Type_Info, src_node: *Data_Node, data: *void) -> *Type_Info_Struct_Member {
     user_data := data.(*Resolve_Union_By_Tag_Data);
     
     if union_info != user_data.union_type  return null;
     if src.parent.value_pointer == null  return null;
     if data                     == null  return null;
     
-    src := src_ctx.any;
+    src := src_node.any;
     src_struct_info := src.type.(*Type_Info_Struct);
     assert(is_union_type(src_struct_info));
     
     dst_tag := Any_Number.{ user_data.tag_type };
     
-    src_tag_found, src_tag := get_member(src_ctx.parent, user_data.tag_member_name);
+    src_tag_found, src_tag := get_member(src_node.parent.any, user_data.tag_member_name);
     if !src_tag_found  return null;
     if !remap_enum(to_any(*dst_tag), src_tag)  return null;
     
@@ -86,13 +86,13 @@ resolve_union_by_external_tag : Resolve_Union_Proc : (union_info: *Type_Info, sr
     And the rest of this is also not really ideal anyhow, so I'm not gonna worry about making it 2% nicer 
         until I figure out a way to make the 98% of union remapping less clunky and horrible.
 */
-resolve_union_by_internal_tag : Resolve_Union_Proc : (union_info: *Type_Info, src_ctx: Any_With_Context, data: *void) -> *Type_Info_Struct_Member {
+resolve_union_by_internal_tag : Resolve_Union_Proc : (union_info: *Type_Info, src_node: *Data_Node, data: *void) -> *Type_Info_Struct_Member {
     user_data := data.(*Resolve_Union_By_Tag_Data);
     
     if union_info != user_data.union_type  return null;
     if data == null  return null;
     
-    src := src_ctx.any;
+    src := src_node.any;
     src_struct_info := src.type.(*Type_Info_Struct);
     assert(is_union_type(src_struct_info));
     

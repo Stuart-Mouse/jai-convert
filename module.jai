@@ -101,7 +101,7 @@ Conversion_Settings :: struct {
 
 // Union types are resolved by returning the type info struct member for the union member that is valid.
 // The union_info parameter is used during remapping to pass the dst union's type info, since we usually want to match on this rather than on the src type.
-Resolve_Union_Proc :: #type (union_info: *Type_Info, src: Any_With_Context, user_data: *void) -> *Type_Info_Struct_Member;
+Resolve_Union_Proc :: #type (union_info: *Type_Info, data_node: *Data_Node, user_data: *void) -> *Type_Info_Struct_Member;
 
 User_Remap_Proc_Result :: enum { ERROR; UNHANDLED; HANDLED; }
 User_Remap_Proc :: #type (dst: Any, src: Any, user_data: *void) -> User_Remap_Proc_Result;
@@ -122,17 +122,75 @@ log_unsupported_conversion :: inline (conversion: Conversion_Types, proc_name: s
 #scope_export
 
 
-// TODO: explain/document this structure better
-Any_With_Context :: struct {
-    any:                  Any;
-    parent:               Any;                        // if data is a struct member or array element, this points to the struct or array.
-    struct_member_info:   *Type_Info_Struct_Member;   // if data is a struct member, this is the info for that. may be null.
+// TODO: maybe disambiguate struct member and union member
+Data_Node :: struct {
+    any:        Any;
+    parent:     *Data_Node;
     
-    // unfortunately cannot put a 'using' on an Any, so we use a #place and duplicate the members for direct access
-    #place any; 
-        type: *Type_Info;
-        value_pointer: *void;
+    Kind :: enum { NO_CONTEXT; STRUCT_MEMBER; ARRAY_INDEX; DEREFERENCE; };
+    kind:   Kind;
+    union {
+        name:           string; // used when kind is .ROOT
+        member_info:    *Type_Info_Struct_Member;
+        index:          int;
+    }
+    
+    // NOTE: this is because we can't 'using' an Any
+    #place any;
+        type:           *Type_Info;
+        value_pointer:  *void;
 }
+
+format_data_trace :: (node: *Data_Node) -> string {
+    builder: String_Builder;
+    init_string_builder(*builder);
+    format_data_trace(*builder, node);
+    return builder_to_string(*builder);
+}
+
+format_data_trace :: (builder: *String_Builder, node: *Data_Node) {
+    if node.parent != null {
+        format_data_trace(builder, node.parent);
+    }
+    
+    if #complete node.kind == {
+      case .NO_CONTEXT;
+        append(builder, node.name);
+      case .STRUCT_MEMBER;
+        print(builder, ".%", node.member_info.name);
+      case .ARRAY_INDEX;
+        print(builder, "[%]", node.index);
+      case .DEREFERENCE;
+        append(builder, ".*");
+    }
+}
+
+// push_data_trace_node :: (packer: *Data_Packer, node: Data_Node) #expand {
+//     node.parent = packer.data_trace_node;
+//     packer.data_trace_node = *node;
+//     `defer packer.data_trace_node = node.parent;
+// }
+
+// push_data_trace_struct_member :: (packer: *Data_Packer, member_info: *Type_Info_Struct_Member) #expand {
+//     node := Data_Node.{ kind = .STRUCT_MEMBER, member_info = member_info };
+//     node.parent = packer.data_trace_node;
+//     packer.data_trace_node = *node;
+//     `defer packer.data_trace_node = node.parent;
+// }
+
+// push_data_trace_array_index :: (packer: *Data_Packer, index: int) #expand {
+//     node := Data_Node.{ kind = .ARRAY_INDEX, index = index };
+//     node.parent = packer.data_trace_node;
+//     packer.data_trace_node = *node;
+//     `defer packer.data_trace_node = node.parent;
+// }
+
+// push_data_trace_dereference :: (packer: *Data_Packer) #expand {
+//     node := Data_Node.{ kind = .DEREFERENCE };
+//     node.parent = packer.data_trace_node;
+//     packer.data_trace_node = *node;
+//     `defer packer.data_trace_node = node.parent;
+// }
 
 
 // ========== Remapping Procedures ==========
@@ -152,42 +210,54 @@ any_to_new :: inline (T: *Type_Info, src: Any) -> Any, bool {
 }
 
 // the most general remapping procedure, handles any dst and src types
-any_to_any :: (_dst: Any, _src: Any) -> bool {
-    dst := _dst;
-    src := _src;
-    
+any_to_any :: (dst: Any, src: Any) -> bool {
+    dst_node := Data_Node.{ kind = .NO_CONTEXT, name = "dst", any = dst };
+    src_node := Data_Node.{ kind = .NO_CONTEXT, name = "src", any = src };
+    return remap_data(*dst_node, *src_node);
+}
+
+remap_data :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     for context.conversion_settings.user_remap_procs {
-        if it.proc(dst, src, it.data) == {
+        if it.proc(dst_node.any, src_node.any, it.data) == {
           case .UNHANDLED;  // no op
           case .HANDLED;    return true;
           case .ERROR;      return false;
         }
     }
     
-    // NOTE: the loops are there because I assumed variants could be nested, but maybe this is not the case..?
-    while dst.type.type == .VARIANT { dst.type = dst.type.(*Type_Info_Variant).variant_of; }
-    while src.type.type == .VARIANT { src.type = src.type.(*Type_Info_Variant).variant_of; }
+    // log("=====");
+    // log("dst: %", format_data_trace(dst_node));
+    // log("src: %", format_data_trace(src_node));
     
-    if dst.type.type == {
+    // copy data nodes so that we can modify type if need be
+    _dst_node := dst_node.*;
+    _src_node := src_node.*;
+    
+    // TODO: we should have some proper get_base_type proc that we use for cases like this
+    // NOTE: the loops are there because I assumed variants could be nested, but maybe this is not the case..?
+    while _dst_node.type.type == .VARIANT { _dst_node.type = _dst_node.type.(*Type_Info_Variant).variant_of; }
+    while _src_node.type.type == .VARIANT { _src_node.type = _src_node.type.(*Type_Info_Variant).variant_of; }
+    
+    if _dst_node.type.type == {
       case .STRING;
-        if src.type.type == .STRING {
+        if _src_node.type.type == .STRING {
             // TODO: we would like to have an option as to whether this should copy
-            dst.value_pointer.(*string).* = copy_string(src.value_pointer.(*string).*);
+            _dst_node.value_pointer.(*string).* = copy_string(_src_node.value_pointer.(*string).*);
             return true;
         }
         if is_allowed(.ARRAY_TO_STRING) {
-            if src.type.type == .ARRAY {
+            if _src_node.type.type == .ARRAY {
                 // cannot just compare array element type to type_info(u8), since src.type could be dynamically loaded
                 // so instead we assume that any type with runtime size of 1 is probably u8... 
-                ti_array := src.type.(*Type_Info_Array);
-                if ti_array.element_type.runtime_size == 1  return false; 
-                if ti_array.array_type == .FIXED {
-                    dst_string := dst.value_pointer.(*string);
-                    memcpy(dst_string.data, src.value_pointer, ti_array.array_count);
-                    dst_string.count = ti_array.array_count;
+                array_info := _src_node.type.(*Type_Info_Array);
+                if array_info.element_type.runtime_size == 1  return false; 
+                if array_info.array_type == .FIXED {
+                    dst_string := _dst_node.value_pointer.(*string);
+                    memcpy(dst_string.data, _src_node.value_pointer, array_info.array_count);
+                    dst_string.count = array_info.array_count;
                 } else {
                     // TODO: we would like to have an option as to whether this should copy
-                    dst.value_pointer.(*string).* = copy_string(src.value_pointer.(*string).*);
+                    _dst_node.value_pointer.(*string).* = copy_string(_src_node.value_pointer.(*string).*);
                 }
                 return true;
             }
@@ -195,22 +265,22 @@ any_to_any :: (_dst: Any, _src: Any) -> bool {
         return false;
         
       case .BOOL;
-        return any_to_bool(dst, src);
+        return any_to_bool(_dst_node.any, _src_node.any);
         
       case .INTEGER;
-        return any_to_int(dst, src);
+        return any_to_int(_dst_node.any, _src_node.any);
         
       case .FLOAT;
-        return any_to_float(dst, src);
+        return any_to_float(_dst_node.any, _src_node.any);
         
       case .ENUM;
-        return remap_enum(dst, src);
+        return remap_enum(_dst_node.any, _src_node.any);
         
       case .STRUCT;
-        return remap_struct(dst, src);
+        return remap_struct(*_dst_node, *_src_node);
         
       case .ARRAY;
-        return remap_array(dst, src);
+        return remap_array(_dst_node.any, _src_node.any);
         
       case .POINTER;
         // Two methods of handling pointers:
@@ -223,28 +293,30 @@ any_to_any :: (_dst: Any, _src: Any) -> bool {
         //       It's just a bit more complex here because we also have the context stuff, but oh well.
         if is_allowed(.REMAP_THROUGH_POINTER) {
             // TODO: add option to configure allocator to use for a given type
-            if src.value_pointer == null  return true;
+            if _src_node.value_pointer.(**void).* == null  return true;
             
-            src_derefed := dereference_any_pointer(src);
-            if src_derefed.value_pointer == null  return true;
+            src_dereferenced := dereference_any_pointer(_src_node.any);
+            src_dereferenced_node := Data_Node.{ kind = .DEREFERENCE, any = src_dereferenced, parent = *_src_node };
             
-            dst_derefed := dereference_any_pointer(dst);
-            if dst_derefed.value_pointer == null {
-                dst_derefed.value_pointer = Dynamic_New(dst_derefed.type);
-                dst.value_pointer.(**void).* = dst_derefed.value_pointer;
+            dst_dereferenced := dereference_any_pointer(_dst_node.any);
+            dst_dereferenced_node := Data_Node.{ kind = .DEREFERENCE, any = dst_dereferenced, parent = *_dst_node };
+            
+            // allocate dst value if need be and set the dst pointers according
+            if dst_dereferenced_node.value_pointer == null {
+                dst_dereferenced_node.value_pointer = Dynamic_New(dst_dereferenced_node.type);
+                _dst_node.value_pointer.(**void).*  = dst_dereferenced_node.value_pointer;
             }
             
-            // TODO: if this fails, we should deallocate the dynamic_new'd item
-            return any_to_any(dst_derefed, src_derefed);
-        } 
+            // TODO: if this fails, we should probably deallocate the dynamic_new'd item?
+            return remap_data(*dst_dereferenced_node, *src_dereferenced_node);
+        }
         
         // only attempt shallow copy if remapping through pointer is not allowed
         if is_allowed(.SHALLOW_COPY_POINTER) {
             // TODO: make this more powerful by allowing recasting of pointers to common type.
             // e.g.: dst is *Type_Info and src is *Type_Info_Struct, should be allowed
-            
-            if src.type == dst.type {
-                dst.value_pointer.(**void).* = src.value_pointer.(**void).*;
+            if _src_node.type == _dst_node.type {
+                _dst_node.value_pointer.(**void).* = _src_node.value_pointer.(**void).*;
             }
             return true;
         }
@@ -257,12 +329,12 @@ any_to_any :: (_dst: Any, _src: Any) -> bool {
     return true;
 }
 
-remap_struct :: (dst: Any, src: Any) -> bool {
-    assert(dst.type.type == .STRUCT);
-    if src.type.type != .STRUCT  return false;
+remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
+    assert(dst_node.type.type == .STRUCT);
+    if src_node.type.type != .STRUCT  return false;
     
-    if is_union_type(dst.type) {
-        return remap_union(dst, .{ any = src });
+    if is_union_type(dst_node.type) {
+        return remap_union(dst_node, src_node);
     }
     
     if !is_allowed(.REMAP_STRUCT) {
@@ -270,12 +342,13 @@ remap_struct :: (dst: Any, src: Any) -> bool {
         return false;
     }
     
-    iterate_struct_members(dst, .SKIP_CONSTANT | .SKIP_PLACE, #code {
+    iterate_struct_members(dst_node.any, .SKIP_CONSTANT | .SKIP_PLACE, #code {
         // TODO: I am probably not properly handling the case where a using is on a union
+        dst_member_node := Data_Node.{ kind = .STRUCT_MEMBER, member_info = it_info, any = it, parent = dst_node };
         
         // NOTE: get_member calls get_field, which searches recursively through usings
         //       maybe we should make this a parameter so that we can toggle this behavior
-        found, src_member, src_member_info := get_member(src, it_info.name);
+        found, src_member, src_member_info := get_member(src_node.any, it_info.name);
         if !found {
             /*
                 I'm not sure if this could have unintended side-effects,
@@ -284,8 +357,8 @@ remap_struct :: (dst: Any, src: Any) -> bool {
                 this should allow the remapper to catch cases where you factor out some member into a another struct and then 'using' that new struct in the old struct 
             */
             if it_info.flags & .USING {
-                print("remapping src to using'd member % (%)\n", it_info.name, as_type(it_info.type));
-                if !any_to_any(it, src)  {
+                log("remapping src to using'd member % (%)", it_info.name, as_type(it_info.type));
+                if !remap_data(*dst_member_node, src_node)  {
                     log("Error: failed while remapping struct member %!", it_info.name);
                     return false;
                 }
@@ -294,14 +367,16 @@ remap_struct :: (dst: Any, src: Any) -> bool {
         }
         if src_member_info.flags & .CONSTANT  continue;
         
-        if is_union_type(it_info.type) {
-            if !remap_union(it, .{ src_member, src, src_member_info })  {
+        src_member_node := Data_Node.{ kind = .STRUCT_MEMBER, member_info = src_member_info, any = src_member, parent = src_node };
+        
+        if is_union_type(dst_member_node.type) {
+            if !remap_union(*dst_member_node, *src_member_node) {
                 log("Error: failed while remapping struct member (union) %!", it_info.name);
                 return false;
             }
         } else {
             // TODO: what if src is union, but dst is not?
-            if !any_to_any(it, src_member)  {
+            if !remap_data(*dst_member_node, *src_member_node)  {
                 log("Error: failed while remapping struct member %!", it_info.name);
                 return false;
             }
@@ -320,34 +395,31 @@ remap_struct :: (dst: Any, src: Any) -> bool {
     // TODO: dst really should be an Any_With_Context as well so that the resolve_union_proc can set an external tag accordingly (if need be).
              (technically, this doesn't need to be the case as an external tag should already be set by remapping the parent struct, but it seems wise to set the value explicitly...)
 */
-remap_union :: (dst: Any, src_ctx: Any_With_Context) -> bool {
+remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     settings := context.conversion_settings;
     
-    dst_struct_info := dst.type.(*Type_Info_Struct);
+    dst_struct_info := dst_node.type.(*Type_Info_Struct);
     assert(is_union_type(dst_struct_info));
-    
-    // to help prevent confusion
-    src := src_ctx.any;
     
     if !is_allowed(.REMAP_UNION) {
         log_unsupported_conversion(.REMAP_UNION, "remap_struct");
         return false;
     }
     
-    // NOTE: this feature is not be usable when remapping from dynamically generated type infos to native type infos, as we do in data packer, since the type infos muct be an exact match
-    if !is_union_type(src.type) {
-        if union_contains_type(dst_struct_info, src.type) {
+    // NOTE: this feature is not usable when remapping from dynamically generated type infos to native type infos, as we do in data packer, since the type infos muct be an exact match
+    if !is_union_type(src_node.type) {
+        if union_contains_type(dst_struct_info, src_node.type) {
             // TODO: should we just shallowly memcpy since types match exactly?
             //       the fact that I have to ask this means allocations are too confusing right now...
-            return any_to_any(Any.{ src.type, dst.value_pointer }, src);
+            return any_to_any(Any.{ src_node.type, dst_node.value_pointer }, src_node.any);
         }
-        log("Error: unable to remap type % to %. src type is not a member of dst union.", as_type(src.type), as_type(dst.type));
+        log("Error: unable to remap type % to %. src type is not a member of dst union.", as_type(src_node.type), as_type(dst_node.type));
         return false;
     }
     
     src_member_info: *Type_Info_Struct_Member;
     for settings.get_union_type_procs {
-        src_member_info = it.proc(dst.type, src_ctx, it.data);
+        src_member_info = it.proc(dst_node.type, src_node, it.data);
         if src_member_info  break;
     }
     if !src_member_info  {
@@ -356,8 +428,8 @@ remap_union :: (dst: Any, src_ctx: Any_With_Context) -> bool {
     }
     assert(src_member_info.flags & .CONSTANT == 0);
     
-    src_member := get_member(src, src_member_info);
-    dst_member_found, dst_member := get_member(dst, src_member_info.name);
+    src_member := get_member(src_node.any, src_member_info);
+    dst_member_found, dst_member := get_member(dst_node.any, src_member_info.name);
     
     if dst_member_found {
         return any_to_any(dst_member, src_member);
