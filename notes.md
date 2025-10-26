@@ -135,3 +135,22 @@ also procedure pointers
     but for that use case I will probably just do some local data pointer thing and skip Convert.jai entirely
     
     
+## Data_Node
+
+Added this data node struct as a replacement for the Any_With_Context
+These nodes can now be used as a comprehensive trace into a nested data structure in a manner akin to a stack trace
+This will be helpful for both complex remapping operations (e.g. unions) and error reporting
+
+
+### Using an external type table for data packer
+
+Obviously this module is not the data packer, but the notes are going here for now since the two are still somewhat conjoined at the hip
+
+This type table stuff will probably have to coincide with properly reimplementing better pointer encoding
+    because we will likely want to do some simple type info reduction or allow the user some mechanism to encode type info in their own way
+
+when loading a data blob which could contain Any's
+    we need both the src type table and dst type table
+    we need to somehow map indices between the src and dst types
+
+

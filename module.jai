@@ -280,7 +280,7 @@ remap_data :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
         return remap_struct(*_dst_node, *_src_node);
         
       case .ARRAY;
-        return remap_array(_dst_node.any, _src_node.any);
+        return remap_array(*_dst_node, *_src_node);
         
       case .POINTER;
         // Two methods of handling pointers:
@@ -442,11 +442,11 @@ remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
 
 // TODO: consider how allocators / allocations should work and what settings to implement
 // Shallow copy vs deep copy options?
-remap_array :: (dst: Any, src: Any) -> bool {
-    dst_array := Any_Array.from(dst);  // asserts that dst is actually an array type 
+remap_array :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
+    dst_array := Any_Array.from(dst_node.any);  // asserts that dst is actually an array type 
     
     // remap string to array of u8
-    if src.type.type == .STRING {
+    if src_node.type.type == .STRING {
         if !is_allowed(.STRING_TO_ARRAY) {
             log_disallowed_conversion(.STRING_TO_ARRAY, "remap_array");
             return false;
@@ -456,7 +456,7 @@ remap_array :: (dst: Any, src: Any) -> bool {
             log("Error: cannot convert from string to %.", as_type(dst_array.array_info));
         }
         
-        src_string_pointer := src.value_pointer.(*string);
+        src_string_pointer := src_node.value_pointer.(*string);
         if dst_array.array_type == {
           case .FIXED;
             count := min(dst_array.array_count, src_string_pointer.count);
@@ -478,21 +478,21 @@ remap_array :: (dst: Any, src: Any) -> bool {
     src_array_info: Type_Info_Array;
     src_array := Any_Array.{
         array_info    = *src_array_info,
-        value_pointer = src.value_pointer,
+        value_pointer = src_node.value_pointer,
     };
     
     conversion_type := Conversion_Types.UNKNOWN_CONVERSION;
     
-    if src.type.type == .ARRAY {
+    if src_node.type.type == .ARRAY {
         // if source type is actually an array, just point at that instead of the made up type
-        src_array.array_info = src.type.(*Type_Info_Array);
+        src_array.array_info = src_node.type.(*Type_Info_Array);
     } else {
         // for single-to-array, we treat the one element T as a [1] T
         conversion_type = .SINGLE_TO_ARRAY;
         src_array_info = .{
             type         = .ARRAY,
-            runtime_size = src.type.runtime_size,
-            element_type = src.type,
+            runtime_size = src_node.type.runtime_size,
+            element_type = src_node.type,
             array_type   = .FIXED,
             array_count  = 1,
         };
@@ -575,7 +575,9 @@ remap_array :: (dst: Any, src: Any) -> bool {
     dst_element := Any.{ dst_array.element_type, dst_data };
     
     for 0..min_count-1 {
-        if !any_to_any(dst_element, src_element)  return false;
+        dst_element_node := Data_Node.{ kind = .ARRAY_INDEX, any = dst_element, parent = dst_node };
+        src_element_node := Data_Node.{ kind = .ARRAY_INDEX, any = src_element, parent = src_node };
+        if !remap_data(*dst_element_node, *src_element_node)  return false;
         src_element.value_pointer += src_array.element_type.runtime_size;
         dst_element.value_pointer += dst_array.element_type.runtime_size;
     }
