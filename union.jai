@@ -18,14 +18,13 @@ resolve_union_by_external_tag : Resolve_Union_Proc : (union_info: *Type_Info, sr
     user_data := data.(*Resolve_Union_By_Tag_Data);
     
     if union_info != user_data.union_type  return null;
-    if src.parent.value_pointer == null  return null;
-    if data                     == null  return null;
+    if src_node.parent.value_pointer == null  return null;
+    if data == null  return null;
     
-    src := src_node.any;
-    src_struct_info := src.type.(*Type_Info_Struct);
+    src_struct_info := src_node.type.(*Type_Info_Struct);
     assert(is_union_type(src_struct_info));
     
-    dst_tag := Any_Number.{ user_data.tag_type };
+    dst_tag := Any_Number.zero_of_type(user_data.tag_type);
     
     src_tag_found, src_tag := get_member(src_node.parent.any, user_data.tag_member_name);
     if !src_tag_found  return null;

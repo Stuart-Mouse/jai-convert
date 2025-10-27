@@ -154,3 +154,28 @@ when loading a data blob which could contain Any's
     we need to somehow map indices between the src and dst types
 
 
+## Type Library Plugin
+
+this is probably not the approprite place for these notes either, but iiwii atm
+
+basically, we want to have a metaprogram that collects all the types in our program as well as some additional data about those types
+because the basic type table is just a flat array of all the type infos, and that's not really adequate if we want to match type infos across time / builds
+
+for now, I won't even think about the way types may vary across compilation targets, but that is a valid concern
+
+first priority is just to be able to identify types across time
+and differentiate types with the same name that are declared in different modules/namespaces
+
+we can check enclosing_load.enclosing_import 
+    can just store either the Message_File or Message_Import and use that to disambiguate
+    should check what codex view does with this, since we probably want to do something similar
+    it seems like we probably end up with a simlar problem (to that of matching types across compilations) of trying to match module and file imports by name across compilations
+    
+at the very least, if we can store the module name alongside the type in our program, we can probably disambiguate enough to map types from one type library to another
+    this process will probably still be kinda slow, but I suppose that's the price of doing wacky dynamic things
+    
+
+
+
+
+
