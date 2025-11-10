@@ -127,7 +127,7 @@ Data_Node :: struct {
     any:        Any;
     parent:     *Data_Node;
     
-    Kind :: enum { NO_CONTEXT; STRUCT_MEMBER; ARRAY_INDEX; DEREFERENCE; };
+    Kind :: enum { NO_CONTEXT :: 0; STRUCT_MEMBER; ARRAY_INDEX; DEREFERENCE; };
     kind:   Kind;
     union {
         name:           string; // used when kind is .ROOT
@@ -357,11 +357,13 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
                 this should allow the remapper to catch cases where you factor out some member into a another struct and then 'using' that new struct in the old struct 
             */
             if it_info.flags & .USING {
-                log("remapping src to using'd member % (%)", it_info.name, as_type(it_info.type));
+                log("Info: remapping src (%) to using'd member % (%)", as_type(src_node.type), it_info.name, as_type(it_info.type));
                 if !remap_data(*dst_member_node, src_node)  {
                     log("Error: failed while remapping struct member %!", it_info.name);
                     return false;
                 }
+            } else {
+                log("Warning: unable to remap struct member %!", it_info.name);
             }
             continue;
         }
