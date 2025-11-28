@@ -342,7 +342,7 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
         return false;
     }
     
-    iterate_struct_members(dst_node.any, .SKIP_CONSTANT | .SKIP_PLACE, #code {
+    iterate_struct_members(dst_node.any, .SKIP_CONSTANT_AND_OVERLAY, #code {
         // TODO: I am probably not properly handling the case where a using is on a union
         dst_member_node := Data_Node.{ kind = .STRUCT_MEMBER, member_info = it_info, any = it, parent = dst_node };
         
