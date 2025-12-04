@@ -124,7 +124,8 @@ log_unsupported_conversion :: inline (conversion: Conversion_Types, proc_name: s
 
 // TODO: maybe disambiguate struct member and union member
 Data_Node :: struct {
-    any:        Any;
+    type:           *Type_Info;
+    value_pointer:  *void;
     parent:     *Data_Node;
     
     Kind :: enum { NO_CONTEXT :: 0; STRUCT_MEMBER; ARRAY_INDEX; DEREFERENCE; };
@@ -135,10 +136,7 @@ Data_Node :: struct {
         index:          int;
     }
     
-    // NOTE: this is because we can't 'using' an Any
-    #place any;
-        type:           *Type_Info;
-        value_pointer:  *void;
+    #overlay(type) any: Any;
 }
 
 format_data_trace :: (node: *Data_Node) -> string {
