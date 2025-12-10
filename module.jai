@@ -1134,7 +1134,7 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
         //       we want to OR in the parsed value for enum_flags instead of overwriting the existing value.
         
         enum_type := dst.type.(*Type_Info_Enum);  
-        new_value := Any_Number.{ type = enum_type };
+        new_value := Any_Number.{ _type_info = enum_type };
         success := false;
         
         for enum_type.names {
