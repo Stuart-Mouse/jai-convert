@@ -126,12 +126,12 @@ log_unsupported_conversion :: inline (conversion: Conversion_Types, proc_name: s
 Data_Node :: struct {
     type:           *Type_Info;
     value_pointer:  *void;
-    parent:     *Data_Node;
+    parent:         *Data_Node;
     
     Kind :: enum { NO_CONTEXT :: 0; STRUCT_MEMBER; ARRAY_INDEX; DEREFERENCE; };
     kind:   Kind;
     union {
-        name:           string; // used when kind is .ROOT
+        name:           string; // used when kind is .NO_CONTEXT
         member_info:    *Type_Info_Struct_Member;
         index:          int;
     }
