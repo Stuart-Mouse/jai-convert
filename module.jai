@@ -89,7 +89,6 @@ Conversion_Settings :: struct {
     allowed_conversions:    Conversion_Types;
     float_rounding_mode:    Float_Rounding_Mode;
     
-    get_union_type_procs:   [..] struct { proc: Resolve_Union_Proc;  data: *void; };
     user_remap_procs:       [..] struct { proc: User_Remap_Proc;     data: *void; };
     
     // should this just be a flag in Conversion_Types? Or should we make a separate flags member for things like this?
@@ -136,7 +135,7 @@ Data_Node :: struct {
         index:          int;
     }
     
-    #overlay(type) any: Any;
+    #overlay(type) any: Any; // because we can't `using` an Any
 }
 
 format_data_trace :: (node: *Data_Node) -> string {
@@ -386,15 +385,6 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     return true;
 }
 
-/*
-    NOTE: 
-    On its own, remap_union cannot actually figure out which union member is valid. 
-    For that, a user callback must be provided in context.conversion_settings.get_union_type_procs.
-    See union.jai for some relevant helper procs and examples.
-    
-    // TODO: dst really should be an Any_With_Context as well so that the resolve_union_proc can set an external tag accordingly (if need be).
-             (technically, this doesn't need to be the case as an external tag should already be set by remapping the parent struct, but it seems wise to set the value explicitly...)
-*/
 remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     settings := context.conversion_settings;
     
@@ -402,41 +392,50 @@ remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     assert(is_union_type(dst_struct_info));
     
     if !is_allowed(.REMAP_UNION) {
-        log_unsupported_conversion(.REMAP_UNION, "remap_struct");
+        log_unsupported_conversion(.REMAP_UNION, "remap_union");
         return false;
     }
     
+    // TODO: probably remove this stuff fully... or at least restrict use to only tagged unions where a Type is used as the tag
     // NOTE: this feature is not usable when remapping from dynamically generated type infos to native type infos, as we do in data packer, since the type infos muct be an exact match
-    if !is_union_type(src_node.type) {
-        if union_contains_type(dst_struct_info, src_node.type) {
-            // TODO: should we just shallowly memcpy since types match exactly?
-            //       the fact that I have to ask this means allocations are too confusing right now...
-            return any_to_any(Any.{ src_node.type, dst_node.value_pointer }, src_node.any);
-        }
-        log("Error: unable to remap type % to %. src type is not a member of dst union.", as_type(src_node.type), as_type(dst_node.type));
-        return false;
+    // if !is_union_type(src_node.type) {
+    //     if union_contains_type(dst_struct_info, src_node.type) {
+    //         // TODO: should we just shallowly memcpy since types match exactly?
+    //         //       the fact that I have to ask this means allocations are too confusing right now...
+    //         return any_to_any(Any.{ src_node.type, dst_node.value_pointer }, src_node.any);
+    //     }
+    //     log("Error: unable to remap type % to %. src type is not a member of dst union.", as_type(src_node.type), as_type(dst_node.type));
+    //     return false;
+    // }
+    
+    if !is_tagged_union_type(src_node.type) {
+        log("Warning: Unable to remap from untagged union: %", format_data_trace(src_node,, temp));
+        return true; // Not treating this as an error for now.
+    }
+    if !is_tagged_union_type(dst_node.type) {
+        log("Warning: Unable to remap to untagged union: %", format_data_trace(dst_node,, temp));
+        return true; // Not treating this as an error for now.
     }
     
-    src_member_info: *Type_Info_Struct_Member;
-    for settings.get_union_type_procs {
-        src_member_info = it.proc(dst_node.type, src_node, it.data);
-        if src_member_info  break;
-    }
-    if !src_member_info  {
-        // log("Warning: failed to resolve union member in remap_struct.");
+    
+    src_member, src_member_info := get_valid_union_member(src_node.any);
+    if src_member.type == null {
+        // In this case, the src union was using a Type tag which was null. Don't bother trying to remap...
         return true;
     }
-    assert(src_member_info.flags & .CONSTANT == 0);
     
-    src_member := get_member(src_node.any, src_member_info);
+    // TODO: Perhaps we should actually get the src tag and use that to find the dst member to remap to?
+    //       The current method means we can change the tag type though... which is maybe more useful than being able to change member names? 
+    //       I dunno. Perhaps once the new tagged union stuff is more settled, I will provide an option to do either/or.
     dst_member_found, dst_member := get_member(dst_node.any, src_member_info.name);
-    
     if dst_member_found {
         return any_to_any(dst_member, src_member);
     }
     
-    // log that dst member was not found?
-    return true; // TODO?
+    log("Warning: unable to remap union member %", src_member_info.name);
+    log("\tfrom: %", format_data_trace(src_node,, temp));
+    log("\tto:   %", format_data_trace(dst_node,, temp));
+    return true;
 }
 
 
@@ -780,10 +779,10 @@ any_to_bool :: (dst: Any, src: Any) -> bool {
       case .ENUM; #through;
       case .INTEGER;
         if src.type.runtime_size == {
-            case 1; dst.value_pointer.(*bool).* = src.value_pointer.(*u\8).* != 0;
-            case 2; dst.value_pointer.(*bool).* = src.value_pointer.(*u16).* != 0;
-            case 4; dst.value_pointer.(*bool).* = src.value_pointer.(*u32).* != 0;
-            case 8; dst.value_pointer.(*bool).* = src.value_pointer.(*u64).* != 0;
+          case 1; dst.value_pointer.(*bool).* = src.value_pointer.(*u\8).* != 0;
+          case 2; dst.value_pointer.(*bool).* = src.value_pointer.(*u16).* != 0;
+          case 4; dst.value_pointer.(*bool).* = src.value_pointer.(*u32).* != 0;
+          case 8; dst.value_pointer.(*bool).* = src.value_pointer.(*u64).* != 0;
         }
         return true;
         
@@ -1134,7 +1133,7 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
         //       we want to OR in the parsed value for enum_flags instead of overwriting the existing value.
         
         enum_type := dst.type.(*Type_Info_Enum);  
-        new_value := Any_Number.{ _type_info = enum_type };
+        new_value := Any_Number.zero_of_type(enum_type);
         success := false;
         
         for enum_type.names {
@@ -1174,12 +1173,11 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
 
 #scope_module
 
-#load "union.jai";
-
 #import "Basic";
 #import "Reflection";
 #import "Math";
 
 // As usual, I dislike that I have a dependency on my utils module here, but for now IIWII.
 #import "Utils";
+
 
