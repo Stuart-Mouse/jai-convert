@@ -89,7 +89,7 @@ Conversion_Settings :: struct {
     allowed_conversions:    Conversion_Types;
     float_rounding_mode:    Float_Rounding_Mode;
     
-    user_remap_procs:       [..] struct { proc: User_Remap_Proc;     data: *void; };
+    user_remap_procs:       [..] struct { proc: User_Remap_Proc; data: *void; };
     
     // should this just be a flag in Conversion_Types? Or should we make a separate flags member for things like this?
     // or, maybe we just change the function of INT_NARROWING to permit clamping?   I dunno...
@@ -119,75 +119,6 @@ log_unsupported_conversion :: inline (conversion: Conversion_Types, proc_name: s
     log("Error: unsupported conversion % in % (line: %)", conversion, proc_name, loc.line_number);
 }
 #scope_export
-
-
-// TODO: maybe disambiguate struct member and union member
-Data_Node :: struct {
-    type:           *Type_Info;
-    value_pointer:  *void;
-    parent:         *Data_Node;
-    
-    Kind :: enum { NO_CONTEXT :: 0; STRUCT_MEMBER; ARRAY_INDEX; DEREFERENCE; };
-    kind:   Kind;
-    union {
-        name:           string; // used when kind is .NO_CONTEXT
-        member_info:    *Type_Info_Struct_Member;
-        index:          int;
-    }
-    
-    #overlay(type) any: Any; // because we can't `using` an Any
-}
-
-format_data_trace :: (node: *Data_Node) -> string {
-    builder: String_Builder;
-    init_string_builder(*builder);
-    format_data_trace(*builder, node);
-    return builder_to_string(*builder);
-}
-
-format_data_trace :: (builder: *String_Builder, node: *Data_Node) {
-    if node.parent != null {
-        format_data_trace(builder, node.parent);
-    }
-    
-    if #complete node.kind == {
-      case .NO_CONTEXT;
-        append(builder, node.name);
-      case .STRUCT_MEMBER;
-        print(builder, ".%", node.member_info.name);
-      case .ARRAY_INDEX;
-        print(builder, "[%]", node.index);
-      case .DEREFERENCE;
-        append(builder, ".*");
-    }
-}
-
-// push_data_trace_node :: (packer: *Data_Packer, node: Data_Node) #expand {
-//     node.parent = packer.data_trace_node;
-//     packer.data_trace_node = *node;
-//     `defer packer.data_trace_node = node.parent;
-// }
-
-// push_data_trace_struct_member :: (packer: *Data_Packer, member_info: *Type_Info_Struct_Member) #expand {
-//     node := Data_Node.{ kind = .STRUCT_MEMBER, member_info = member_info };
-//     node.parent = packer.data_trace_node;
-//     packer.data_trace_node = *node;
-//     `defer packer.data_trace_node = node.parent;
-// }
-
-// push_data_trace_array_index :: (packer: *Data_Packer, index: int) #expand {
-//     node := Data_Node.{ kind = .ARRAY_INDEX, index = index };
-//     node.parent = packer.data_trace_node;
-//     packer.data_trace_node = *node;
-//     `defer packer.data_trace_node = node.parent;
-// }
-
-// push_data_trace_dereference :: (packer: *Data_Packer) #expand {
-//     node := Data_Node.{ kind = .DEREFERENCE };
-//     node.parent = packer.data_trace_node;
-//     packer.data_trace_node = *node;
-//     `defer packer.data_trace_node = node.parent;
-// }
 
 
 // ========== Remapping Procedures ==========
@@ -339,55 +270,50 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
         return false;
     }
     
-    iterate_struct_members(dst_node.any, .SKIP_CONSTANT_AND_OVERLAY, #code {
-        // TODO: I am probably not properly handling the case where a using is on a union
-        dst_member_node := Data_Node.{ kind = .STRUCT_MEMBER, member_info = it_info, any = it, parent = dst_node };
+    for:members dst_member: dst_node {
+        // TODO: I am probably not properly handling the case where a using is on a union (later: what did I mean by this?)
         
         // NOTE: get_member calls get_field, which searches recursively through usings
         //       maybe we should make this a parameter so that we can toggle this behavior
-        found, src_member, src_member_info := get_member(src_node.any, it_info.name);
-        if !found {
+        src_member := get_struct_member(src_node, dst_member.member_info.name);
+        if src_member == null {
             /*
                 I'm not sure if this could have unintended side-effects,
                 but the idea here is that if we can't find a match for a member that has a using on it, 
                 then we will fallback to trying to look for the members of the using'd member in the top level of src struct
                 this should allow the remapper to catch cases where you factor out some member into a another struct and then 'using' that new struct in the old struct 
             */
-            if it_info.flags & .USING {
-                log("Info: remapping src (%) to using'd member % (%)", as_type(src_node.type), it_info.name, as_type(it_info.type));
-                if !remap_data(*dst_member_node, src_node)  {
-                    log("Error: failed while remapping struct member %!", it_info.name);
+            if dst_member.member_info.flags & .USING {
+                log("Info: remapping src (%) to using'd member % (%)", as_type(src_node.type), dst_member.member_info.name, as_type(dst_member.member_info.type));
+                if !remap_data(dst_member, src_node)  {
+                    log("Error: failed while remapping struct member %!", dst_member.member_info.name);
                     return false;
                 }
             } else {
-                log("Warning: unable to remap struct member %!", it_info.name);
+                log("Warning: unable to remap struct member %!", dst_member.member_info.name);
             }
             continue;
         }
-        if src_member_info.flags & .CONSTANT  continue;
+        if src_member.member_info.flags & .CONSTANT  continue;
         
-        src_member_node := Data_Node.{ kind = .STRUCT_MEMBER, member_info = src_member_info, any = src_member, parent = src_node };
-        
-        if is_union_type(dst_member_node.type) {
-            if !remap_union(*dst_member_node, *src_member_node) {
-                log("Error: failed while remapping struct member (union) %!", it_info.name);
+        if is_union_type(dst_member.type) {
+            if !remap_union(dst_member, src_member) {
+                log("Error: failed while remapping struct member (union) %!", dst_member.member_info.name);
                 return false;
             }
         } else {
             // TODO: what if src is union, but dst is not?
-            if !remap_data(*dst_member_node, *src_member_node)  {
-                log("Error: failed while remapping struct member %!", it_info.name);
+            if !remap_data(dst_member, src_member)  {
+                log("Error: failed while remapping struct member %!", dst_member.member_info.name);
                 return false;
             }
         }
-    });
+    }
     
     return true;
 }
 
 remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
-    settings := context.conversion_settings;
-    
     dst_struct_info := dst_node.type.(*Type_Info_Struct);
     assert(is_union_type(dst_struct_info));
     
@@ -409,6 +335,7 @@ remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     // }
     
     if !is_tagged_union_type(src_node.type) {
+        print_stack_trace(context.stack_trace);
         log("Warning: Unable to remap from untagged union: %", format_data_trace(src_node,, temp));
         return true; // Not treating this as an error for now.
     }
@@ -417,9 +344,8 @@ remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
         return true; // Not treating this as an error for now.
     }
     
-    
-    src_member, src_member_info := get_valid_union_member(src_node.any);
-    if src_member.type == null {
+    src_member := get_valid_union_member(src_node);
+    if src_member == null {
         // In this case, the src union was using a Type tag which was null. Don't bother trying to remap...
         return true;
     }
@@ -427,12 +353,10 @@ remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     // TODO: Perhaps we should actually get the src tag and use that to find the dst member to remap to?
     //       The current method means we can change the tag type though... which is maybe more useful than being able to change member names? 
     //       I dunno. Perhaps once the new tagged union stuff is more settled, I will provide an option to do either/or.
-    dst_member_found, dst_member := get_member(dst_node.any, src_member_info.name);
-    if dst_member_found {
-        return any_to_any(dst_member, src_member);
-    }
+    dst_member := get_struct_member(dst_node, src_member.member_info.name);
+    if dst_member  return remap_data(dst_member, src_member);
     
-    log("Warning: unable to remap union member %", src_member_info.name);
+    log("Warning: unable to remap union member %", src_member.member_info.name);
     log("\tfrom: %", format_data_trace(src_node,, temp));
     log("\tto:   %", format_data_trace(dst_node,, temp));
     return true;
@@ -1159,9 +1083,9 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
         if enum_type.enum_type_flags & .FLAGS {
             old_value := Any_Number.from(dst);
             new_value.as_u64 |= old_value.as_u64;
-            memcpy_any(dst, to_any(*new_value));
+            Utils.memcpy_any(dst, to_any(*new_value));
         } else {
-            memcpy_any(dst, to_any(*new_value));
+            Utils.memcpy_any(dst, to_any(*new_value));
         }
         return true;
     }
@@ -1173,8 +1097,9 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
 
 #scope_module
 
+#load "data_node.jai";
+
 #import "Basic";
-#import "Reflection";
 #import "Math";
 
 // As usual, I dislike that I have a dependency on my utils module here, but for now IIWII.
