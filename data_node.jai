@@ -16,11 +16,6 @@
         
         Accessing the type-specific info through a using is more useful than the member info.
         So maybe we have like, Data_Node_Array, Data_Node_Struct, etc., and then just have the context union still be accessed without a using.
-    
-    
-    TODO: for struct member, do we need some kind of flag to indicate that some member was retrieved by a using?
-          or should we force the creation of an additional data node so that we can see the using'd member in the trace?
-          (if we do the second option, we will have to do some kind of temp allocations...)
 */
 
 Data_Node :: struct {
@@ -70,12 +65,24 @@ format_data_trace :: (builder: *String_Builder, node: *Data_Node) {
     }
 }
 
+dereference_pointer :: (data_node: *Data_Node) -> *Data_Node #expand {
+    pointer_info := data_node.type.(*Type_Info_Pointer);
+    assert(pointer_info.type == .POINTER);
+    
+    member_node := Data_Node.{ 
+        kind          = .DEREFERENCE, 
+        parent        = data_node, 
+        type          = pointer_info.pointer_to, 
+        value_pointer = data_node.value_pointer.(**void).*,
+    };
+    return *member_node;
+}
+
 // NOTE: macros are used to return a *Data_Node like this, since in most cases we want to allocate the Data_Node on the stack.
 //       maybe in the future I will add some alternate procs that return something allocated with temp
 
-// TODO: get_member should probably not act recursively here, since we then don't know the actual offset_in_bytes of the member if there was a using involved.
 get_struct_member :: (data_node: *Data_Node, member_name: string) -> *Data_Node #expand {
-    ok, any, member_info := get_struct_member(data_node.any, member_name);
+    ok, any, member_info := get_struct_member(data_node.any, member_name, recursive = false);
     if !ok  return null;
     
     member_node := Data_Node.{ 
@@ -98,6 +105,20 @@ get_valid_union_member :: (data_node: *Data_Node) -> *Data_Node #expand {
         member_info = member_info,
     };
     return *member_node;
+}
+
+get_array_element :: (data_node: *Data_Node, index: int) -> *Data_Node #expand {
+    src_array := Any_Array.from(data_node.any);
+    element_any, ok := get_index(src_array, index);
+    if !ok  return null;
+    
+    element_node := Data_Node.{ 
+        kind        = .ARRAY_INDEX, 
+        parent      = data_node, 
+        any         = element_any, 
+        index       = index,
+    };
+    return *element_node;
 }
 
 
