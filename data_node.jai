@@ -139,15 +139,15 @@ get_array_element :: (data_node: *Data_Node, index: int) -> *Data_Node #expand {
     Also of note, this iterator asserts that you haven't passed it a union, since iterating the members of a union is basically nonsense.
 */
 members :: (parent: *Data_Node, body: Code, flags: For_Flags) #expand {
-    ti_struct := parent.type.(*Type_Info_Struct);
-    assert(ti_struct.type == .STRUCT);
-    assert(ti_struct.textual_flags & .UNION == 0);
+    struct_info := parent.type.(*Type_Info_Struct);
+    assert(struct_info.type == .STRUCT);
+    assert(struct_info.textual_flags & .UNION == 0);
     
     member_node: Data_Node;
     `it := *member_node;
     
     // TODO: it_index here is not very meaningful...
-    for *it_info, `it_index: ti_struct.members {
+    for *it_info, `it_index: struct_info.members {
         #if flags & .POINTER == 0 {
             if it_info.flags & .CONSTANT  continue;
         }

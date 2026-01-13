@@ -154,6 +154,8 @@ remap_data :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     _dst_node.type = get_variant_base_type(_dst_node.type);
     _src_node.type = get_variant_base_type(_src_node.type);
     
+    // TODO: Add handling for case where src and/or dst are an Any.
+    
     if _dst_node.type.type == {
       case .STRING;
         // TODO: we would like to have an option as to whether this should copy from src
