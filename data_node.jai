@@ -66,8 +66,7 @@ format_data_trace :: (builder: *String_Builder, node: *Data_Node) {
 }
 
 dereference_pointer :: (data_node: *Data_Node) -> *Data_Node #expand {
-    pointer_info := data_node.type.(*Type_Info_Pointer);
-    assert(pointer_info.type == .POINTER);
+    pointer_info := assert_base_type(data_node.type);
     
     member_node := Data_Node.{ 
         kind          = .DEREFERENCE, 
@@ -139,8 +138,7 @@ get_array_element :: (data_node: *Data_Node, index: int) -> *Data_Node #expand {
     Also of note, this iterator asserts that you haven't passed it a union, since iterating the members of a union is basically nonsense.
 */
 members :: (parent: *Data_Node, body: Code, flags: For_Flags) #expand {
-    struct_info := parent.type.(*Type_Info_Struct);
-    assert(struct_info.type == .STRUCT);
+    struct_info := assert_base_type(parent.type, .STRUCT);
     assert(struct_info.textual_flags & .UNION == 0);
     
     member_node: Data_Node;
@@ -165,10 +163,9 @@ members :: (parent: *Data_Node, body: Code, flags: For_Flags) #expand {
 
 // NOTE: for_flags are ignored here.
 elements :: (parent: *Data_Node, body: Code, flags: For_Flags) #expand {
-    array_info := parent.type.(*Type_Info_Array);
-    assert(array_info.type == .ARRAY);
     assert(for_flags == xx 0);
     
+    array_info := assert_base_type(parent.type, .ARRAY);
     array_count, array_data := get_array_count_and_data(parent.value_pointer, array_info);
     element_node := Data_Node.{ 
         kind          = .STRUCT_MEMBER, 
