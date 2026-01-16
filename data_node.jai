@@ -66,7 +66,7 @@ format_data_trace :: (builder: *String_Builder, node: *Data_Node) {
 }
 
 dereference_pointer :: (data_node: *Data_Node) -> *Data_Node #expand {
-    pointer_info := assert_base_type(data_node.type);
+    pointer_info := assert_base_type(data_node.type, .POINTER);
     
     member_node := Data_Node.{ 
         kind          = .DEREFERENCE, 
@@ -94,7 +94,7 @@ get_struct_member :: (data_node: *Data_Node, member_name: string) -> *Data_Node 
 }
 
 get_valid_union_member :: (data_node: *Data_Node) -> *Data_Node #expand {
-    any, member_info := get_valid_union_member(data_node.any);
+    ok, any, member_info := get_valid_union_member(data_node.any);
     if any.type == null  return null;
     
     member_node := Data_Node.{ 

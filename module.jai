@@ -151,6 +151,7 @@ remap_data :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     _dst_node := dst_node.*;
     _src_node := src_node.*;
     
+    // I don't necessarily like that we are stripping variant info on these nodes...
     _dst_node.type = get_variant_base_type(_dst_node.type);
     _src_node.type = get_variant_base_type(_src_node.type);
     
