@@ -7,15 +7,6 @@
     
     I am now working on extending this structure to support many of the other reflection functionality from my utils module.
     Perhaps this structure will end up being a good all-in-one replacement for the Any for complex reflection code.
-    
-    TODO:
-        From a design standpoint, I need to consider whether Data_Node should be this union-y type or whether we should have 
-        a more pointer-cast-based layout like type info.
-        The main benefit of doing the latter approach would be that we can put a using on member info, or on type-specific data.
-        But there's a bit of extra complexity here in that we have both type and kind to consider, and they're totally orthogonal.
-        
-        Accessing the type-specific info through a using is more useful than the member info.
-        So maybe we have like, Data_Node_Array, Data_Node_Struct, etc., and then just have the context union still be accessed without a using.
 */
 
 Data_Node :: struct {
@@ -24,11 +15,11 @@ Data_Node :: struct {
     parent:         *Data_Node;
     
     Context :: union kind: Kind {
-        name:               string;                     // NO_CONTEXT
-        member_info:        *Type_Info_Struct_Member;   // STRUCT_MEMBER
-        _:                  *Type_Info_Struct_Member;   // UNION_MEMBER
-        index:              int;                        // ARRAY_INDEX
-        _:                  void;                       // DEREFERENCE
+        .NO_CONTEXT,,       name:               string;
+        .STRUCT_MEMBER,,    member_info:        *Type_Info_Struct_Member;
+        .UNION_MEMBER,,     _:                  *Type_Info_Struct_Member;
+        .ARRAY_INDEX,,      index:              int;
+        .DEREFERENCE,,      _:                  void;
         
         Kind :: enum { NO_CONTEXT :: 0; STRUCT_MEMBER; UNION_MEMBER; ARRAY_INDEX; DEREFERENCE; };
     }
@@ -141,7 +132,7 @@ members :: (parent: *Data_Node, body: Code, flags: For_Flags) #expand {
     struct_info := assert_base_type(parent.type, .STRUCT);
     assert(struct_info.textual_flags & .UNION == 0);
     
-    member_node: Data_Node;
+    member_node := Data_Node.{ parent = parent, kind = .STRUCT_MEMBER };
     `it := *member_node;
     
     // TODO: it_index here is not very meaningful...

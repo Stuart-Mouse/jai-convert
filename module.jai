@@ -265,8 +265,12 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
         find_source_member_and_remap :: (dst_member: *Data_Node, src_node: *Data_Node, member_name: string) -> int {
             for:members src_member: src_node {
                 if src_member.member_info.name == member_name {
-                    return ifx remap_data(dst_member, src_member)
-                        then 1 else -1;
+                    if !remap_data(dst_member, src_member) {
+                        log("src: %", format_data_trace(src_member,, temp));
+                        log("dst: %", format_data_trace(dst_member,, temp));
+                        return -1;
+                    }
+                    return 1;
                 }
                 if src_member.member_info.flags & .USING {
                     result := find_source_member_and_remap(dst_member, src_member, member_name);
@@ -282,7 +286,11 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
         
         // Check if we can remap src onto using'd member in dst
         if dst_member.member_info.flags & .USING {
-            if !remap_data(dst_member, src_node)  return false;
+            if !remap_data(dst_member, src_node) {
+                log("src: %", format_data_trace(src_node,, temp));
+                log("dst: %", format_data_trace(dst_node,, temp));
+                return false;
+            }
         } else {
             // log("Warning: unable to remap struct member:\n\t%", format_data_trace(dst_member,, temp));
             // log("...from source:\n\t%", format_data_trace(src_node,, temp));
@@ -483,10 +491,10 @@ remap_enum :: (dst: Any, src: Any) -> bool {
     if is_allowed(conversion) {
         // if we are remapping by name, then it really doesn't make sense to map an enum to enum_flags, does it?
         // for now, we will prohibit it
-        if (dst_ti.enum_type_flags & .FLAGS) != (src_ti.enum_type_flags & .FLAGS) {
-            log_disallowed_conversion(conversion, "remap_enum");
-            return false;
-        }
+        // if (dst_ti.enum_type_flags & .FLAGS) != (src_ti.enum_type_flags & .FLAGS) {
+        //     log_disallowed_conversion(conversion, "remap_enum");
+        //     return false;
+        // }
         
         if dst_ti.enum_type_flags & .FLAGS {
             src_s64, dst_s64: s64;
