@@ -17,11 +17,9 @@ Data_Node :: struct {
     Context :: union kind: Kind {
         .NO_CONTEXT,,       name:               string;
         .STRUCT_MEMBER,,    member_info:        *Type_Info_Struct_Member;
-        .UNION_MEMBER,,     _:                  *Type_Info_Struct_Member;
         .ARRAY_INDEX,,      index:              int;
-        .DEREFERENCE,,      _:                  void;
         
-        Kind :: enum { NO_CONTEXT :: 0; STRUCT_MEMBER; UNION_MEMBER; ARRAY_INDEX; DEREFERENCE; };
+        Kind :: enum { NO_CONTEXT :: 0; STRUCT_MEMBER; ARRAY_INDEX; DEREFERENCE; };
     }
     
     using _context: Context;
@@ -46,8 +44,6 @@ format_data_trace :: (builder: *String_Builder, node: *Data_Node) {
       case .NO_CONTEXT;
         append(builder, node.name);
       case .STRUCT_MEMBER;
-        print(builder, ".%", node.member_info.name);
-      case .UNION_MEMBER;
         print(builder, ".%", node.member_info.name);
       case .ARRAY_INDEX;
         print(builder, "[%]", node.index);
@@ -89,7 +85,7 @@ get_valid_union_member :: (data_node: *Data_Node) -> *Data_Node #expand {
     if any.type == null  return null;
     
     member_node := Data_Node.{ 
-        kind        = .UNION_MEMBER, 
+        kind        = .STRUCT_MEMBER, 
         parent      = data_node, 
         any         = any, 
         member_info = member_info,
