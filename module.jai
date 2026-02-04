@@ -249,7 +249,7 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     assert(dst_node.type.type == .STRUCT);
     if src_node.type.type != .STRUCT  return false;
     
-    if is_union_type(dst_node.type) {
+    if is_union(dst_node.type) {
         return remap_union(dst_node, src_node);
     }
     
@@ -302,7 +302,7 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
 
 remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     dst_struct_info := dst_node.type.(*Type_Info_Struct);
-    assert(is_union_type(dst_struct_info));
+    assert(is_union(dst_struct_info));
     
     if !is_allowed(.REMAP_UNION) {
         log_unsupported_conversion(.REMAP_UNION, "remap_union");
@@ -312,12 +312,12 @@ remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     // TODO: figure out how to better support remapping from non-union to tagged union
     //       the main issue is that comparing types can get messy and slow, and we shouldn't just do that by default
     
-    if !is_tagged_union_type(src_node.type) {
+    if !is_tagged_union(src_node.type) {
         print_stack_trace(context.stack_trace);
         log("Warning: Unable to remap from untagged union: %", format_data_trace(src_node,, temp));
         return true; // Not treating this as an error for now.
     }
-    if !is_tagged_union_type(dst_node.type) {
+    if !is_tagged_union(dst_node.type) {
         log("Warning: Unable to remap to untagged union: %", format_data_trace(dst_node,, temp));
         return true; // Not treating this as an error for now.
     }
@@ -1065,7 +1065,6 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
 #import "Basic";
 #import "Math";
 
-// As usual, I dislike that I have a dependency on my utils module here, but for now IIWII.
-#import "Utils";
+#import "Reflect";
 
 
