@@ -1019,31 +1019,31 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
         // NOTE: The logic here is a bit weird since, whether we get the value by name or as an int,
         //       we want to OR in the parsed value for enum_flags instead of overwriting the existing value.
         
-        enum_type := dst.type.(*Type_Info_Enum);  
-        new_value := Any_Number.zero_of_type(enum_type);
+        enum_info := dst.type.(*Type_Info_Enum);  
+        new_value := Any_Number.zero_of_type(enum_info);
         success := false;
         
-        for enum_type.names {
+        for enum_info.names {
             if it == text {
-                if enum_type.runtime_size == {
-                    case 1; new_value.as_s\8 = enum_type.values[it_index].(s\8); 
-                    case 2; new_value.as_s16 = enum_type.values[it_index].(s16); 
-                    case 4; new_value.as_s32 = enum_type.values[it_index].(s32); 
-                    case 8; new_value.as_s64 = enum_type.values[it_index].(s64); 
+                if enum_info.runtime_size == {
+                    case 1; new_value.as_s\8 = enum_info.values[it_index].(s\8); 
+                    case 2; new_value.as_s16 = enum_info.values[it_index].(s16); 
+                    case 4; new_value.as_s32 = enum_info.values[it_index].(s32); 
+                    case 8; new_value.as_s64 = enum_info.values[it_index].(s64); 
                 }
                 success = true;
                 break;
             }
         }
         if !success {
-            success = set_value_from_string(Any.{ enum_type.internal_type, *new_value.value }, text);
+            success = set_value_from_string(Any.{ enum_info.internal_type, *new_value.value }, text);
         }
         if !success {
             log("Error: failed to parse enum value from string '%'", text);
             return false;
         }
         
-        if enum_type.enum_type_flags & .FLAGS {
+        if enum_info.enum_type_flags & .FLAGS {
             old_value := Any_Number.from(dst);
             new_value.as_u64 |= old_value.as_u64;
             memcpy_any(dst, to_any(*new_value));
@@ -1065,6 +1065,7 @@ set_value_from_string :: (dst: Any, text: string, should_copy_strings := true) -
 #import "Basic";
 #import "Math";
 
+#import "Utils";
 #import "Reflect";
 
 
