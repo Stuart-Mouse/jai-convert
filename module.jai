@@ -118,17 +118,17 @@ log_unsupported_conversion :: inline (conversion: Conversion_Types, proc_name: s
 // ========== Remapping Procedures ==========
 
 // convenience proc for doing conversions more inline with a static dst type
-any_to :: inline ($T: Type, src: Any) -> T, bool {
+any_to :: inline ($T: Type, src: Any) -> bool, T {
     dst: T;
     ok := any_to_any(dst, src);
-    return dst, ok;
+    return ok, dst;
 }
 
 // similar to the above, but the dst type is dynamic, and dst value is dynamically allocated
-any_to_new :: inline (T: *Type_Info, src: Any) -> Any, bool {
+any_to_new :: inline (T: *Type_Info, src: Any) -> bool, Any {
     dst := New_Any(T);
     ok := any_to_any(dst, src);
-    return dst, ok;
+    return ok, dst;
 }
 
 // the most general remapping procedure, handles any dst and src types
