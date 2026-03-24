@@ -647,15 +647,15 @@ bool_to_any :: (dst: Any, src: Any) -> bool {
         
       case .ENUM; #through;
       case .INTEGER;
-        memset(src.value_pointer, 0, src.type.runtime_size);
-        src.value_pointer.(*bool).* = dst.value_pointer.(*bool).*; // NOTE: little endian assumed?
+        memset(dst.value_pointer, 0, dst.type.runtime_size);
+        dst.value_pointer.(*bool).* = src.value_pointer.(*bool).*; // NOTE: little endian assumed?
         return true;
         
       case .FLOAT;
         f64_value: float64 = ifx src.value_pointer.(*bool).* then 1.0 else 0.0;
         if dst.type.runtime_size == {
-          case 4; src.value_pointer.(*float32).* = f64_value.(float32);
-          case 8; src.value_pointer.(*float64).* = f64_value;
+          case 4; dst.value_pointer.(*float32).* = f64_value.(float32);
+          case 8; dst.value_pointer.(*float64).* = f64_value;
         }
     }
     return false;
