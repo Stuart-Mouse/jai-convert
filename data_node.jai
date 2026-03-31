@@ -80,6 +80,17 @@ get_struct_member :: (data_node: *Data_Node, member_name: string) -> *Data_Node 
     return *member_node;
 }
 
+get_union_tag :: (data_node: *Data_Node) -> *Data_Node #expand {
+    tag_any, tag_info := get_union_tag(data_node.any);
+    tag_node := Data_Node.{ 
+        kind        = .STRUCT_MEMBER, 
+        parent      = data_node, 
+        any         = tag_any, 
+        member_info = tag_info,
+    };
+    return *tag_node;
+}
+
 get_valid_union_member :: (data_node: *Data_Node) -> *Data_Node #expand {
     ok, any, member_info := get_valid_union_member(data_node.any);
     if !ok  return null;
