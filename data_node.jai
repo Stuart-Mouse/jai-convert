@@ -150,16 +150,16 @@ members :: (parent: *Data_Node, body: Code, flags: For_Flags) #expand {
 
 // NOTE: for_flags are ignored here.
 elements :: (parent: *Data_Node, body: Code, flags: For_Flags) #expand {
-    assert(for_flags == xx 0);
+    assert(flags == xx 0, "For_Flags are not currently supported in Data_Node elements iterator.");
     
     array_info := assert_base_type(parent.type, .ARRAY);
     array_count, array_data := get_array_count_and_data(parent.value_pointer, array_info);
     element_node := Data_Node.{ 
-        kind          = .STRUCT_MEMBER, 
+        kind          = .ARRAY_INDEX, 
         parent        = parent, 
-        type          = it_info.type,
+        type          = array_info.element_type,
         value_pointer = array_data,
-        member_info   = it_info,
+        index         = 0,
     };
     
     `it       := *element_node;
