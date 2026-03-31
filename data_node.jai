@@ -82,7 +82,7 @@ get_struct_member :: (data_node: *Data_Node, member_name: string) -> *Data_Node 
 
 get_valid_union_member :: (data_node: *Data_Node) -> *Data_Node #expand {
     ok, any, member_info := get_valid_union_member(data_node.any);
-    if any.type == null  return null;
+    if !ok  return null;
     
     member_node := Data_Node.{ 
         kind        = .STRUCT_MEMBER, 
