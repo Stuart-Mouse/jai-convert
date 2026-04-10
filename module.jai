@@ -262,23 +262,6 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
         // This logic is kinda dumb right now...
         // We want to recursively check usings on src struct so that we can remap from a using'd member in src to a member directly in dst.
         // And because we now do this whole Data_Node thing, we need to have nodes for each using'd member.
-        find_source_member_and_remap :: (dst_member: *Data_Node, src_node: *Data_Node, member_name: string) -> int {
-            for:members src_member: src_node {
-                if src_member.member_info.name == member_name {
-                    if !remap_data(dst_member, src_member) {
-                        log("src: %", format_data_trace(src_member,, temp));
-                        log("dst: %", format_data_trace(dst_member,, temp));
-                        return -1;
-                    }
-                    return 1;
-                }
-                if src_member.member_info.flags & .USING {
-                    result := find_source_member_and_remap(dst_member, src_member, member_name);
-                    if result return result;
-                }
-            }
-            return 0;
-        }
         
         result := find_source_member_and_remap(dst_member, src_node, dst_member.member_info.name);
         if result > 0  continue;
@@ -299,6 +282,28 @@ remap_struct :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     
     return true;
 }
+
+#scope_file
+
+find_source_member_and_remap :: (dst_member: *Data_Node, src_node: *Data_Node, member_name: string) -> int {
+    for:members src_member: src_node {
+        if src_member.member_info.name == member_name {
+            if !remap_data(dst_member, src_member) {
+                log("src: %", format_data_trace(src_member,, temp));
+                log("dst: %", format_data_trace(dst_member,, temp));
+                return -1;
+            }
+            return 1;
+        }
+        if src_member.member_info.flags & .USING {
+            result := find_source_member_and_remap(dst_member, src_member, member_name);
+            if result return result;
+        }
+    }
+    return 0;
+}
+        
+#scope_export
 
 remap_union :: (dst_node: *Data_Node, src_node: *Data_Node) -> bool {
     dst_struct_info := dst_node.type.(*Type_Info_Struct);
